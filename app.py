@@ -8,10 +8,12 @@ Run with:
 import json
 import streamlit as st
 import pandas as pd
+import geopandas as gpd
 import folium
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
 from pathlib import Path
+import branca.colormap as cm
 
 
 # Page configuration
@@ -37,6 +39,28 @@ def load_data():
         subcategories = json.load(f)
 
     return stores_df, brands, subcategories
+
+
+@st.cache_data
+def load_census_data():
+    """Load Census tract data with geometries."""
+    data_dir = Path("data")
+    census_path = data_dir / "census_tracts.parquet"
+
+    if not census_path.exists():
+        return None
+
+    gdf = gpd.read_parquet(census_path)
+    return gdf
+
+
+# Census overlay options
+CENSUS_OVERLAYS = {
+    "None": None,
+    "Median Household Income": "median_hh_income",
+    "% Population 21-34": "pct_pop_21_34",
+    "% College Educated": "pct_college_educated"
+}
 
 
 def filter_stores(df: pd.DataFrame, subcategory: str) -> pd.DataFrame:
@@ -105,29 +129,84 @@ def categorize_stores(
     }
 
 
-def filter_by_bounds(df: pd.DataFrame, bounds: dict) -> pd.DataFrame:
-    """Filter dataframe to stores within the given map bounds."""
-    if not bounds:
-        return df
+def add_census_choropleth(m: folium.Map, census_gdf: gpd.GeoDataFrame, overlay_column: str):
+    """Add a Census choropleth layer to the map."""
+    # Filter out null values for the overlay column
+    valid_data = census_gdf[census_gdf[overlay_column].notna()].copy()
 
-    south = bounds["_southWest"]["lat"]
-    north = bounds["_northEast"]["lat"]
-    west = bounds["_southWest"]["lng"]
-    east = bounds["_northEast"]["lng"]
+    if len(valid_data) == 0:
+        return
 
-    mask = (
-        (df["latitude"] >= south) &
-        (df["latitude"] <= north) &
-        (df["longitude"] >= west) &
-        (df["longitude"] <= east)
-    )
-    return df[mask]
+    # Get min/max for color scale
+    vmin = valid_data[overlay_column].quantile(0.05)  # Use 5th percentile to reduce outlier impact
+    vmax = valid_data[overlay_column].quantile(0.95)  # Use 95th percentile
+
+    # Create colormap based on overlay type
+    if overlay_column == "median_hh_income":
+        caption = "Median Household Income ($)"
+        colormap = cm.LinearColormap(
+            colors=["#ffffcc", "#a1dab4", "#41b6c4", "#2c7fb8", "#253494"],
+            vmin=vmin,
+            vmax=vmax,
+            caption=caption
+        )
+        format_value = lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A"
+    elif overlay_column == "pct_pop_21_34":
+        caption = "% Population Ages 21-34"
+        colormap = cm.LinearColormap(
+            colors=["#feebe2", "#fbb4b9", "#f768a1", "#c51b8a", "#7a0177"],
+            vmin=vmin,
+            vmax=vmax,
+            caption=caption
+        )
+        format_value = lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+    else:  # pct_college_educated
+        caption = "% College Educated (Bachelor's+)"
+        colormap = cm.LinearColormap(
+            colors=["#f7fcf5", "#c7e9c0", "#74c476", "#31a354", "#006d2c"],
+            vmin=vmin,
+            vmax=vmax,
+            caption=caption
+        )
+        format_value = lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+
+    # Create style function
+    def style_function(feature):
+        value = feature["properties"].get(overlay_column)
+        if value is None or pd.isna(value):
+            return {
+                "fillColor": "#cccccc",
+                "color": "#666666",
+                "weight": 0.5,
+                "fillOpacity": 0.3
+            }
+        # Clamp value to colormap range
+        clamped_value = max(vmin, min(vmax, value))
+        return {
+            "fillColor": colormap(clamped_value),
+            "color": "#666666",
+            "weight": 0.5,
+            "fillOpacity": 0.5
+        }
+
+    # Add GeoJson layer (no tooltip for census tracts)
+    folium.GeoJson(
+        valid_data,
+        name="Census Overlay",
+        style_function=style_function,
+    ).add_to(m)
+
+    # Add colormap legend to map
+    colormap.add_to(m)
 
 
-def create_folium_map(stores_df: pd.DataFrame):
-    """Create a Folium map with store markers."""
+def create_folium_map(
+    stores_df: pd.DataFrame,
+    census_gdf: gpd.GeoDataFrame = None,
+    census_overlay: str = None,
+):
+    """Create a Folium map with store markers and optional Census overlay."""
 
-    # Calculate center and bounds
     center_lat = stores_df["latitude"].mean()
     center_lon = stores_df["longitude"].mean()
 
@@ -137,6 +216,10 @@ def create_folium_map(stores_df: pd.DataFrame):
         zoom_start=7,
         tiles="cartodbpositron",
     )
+
+    # Add Census choropleth layer if selected (BEFORE store markers)
+    if census_gdf is not None and census_overlay is not None:
+        add_census_choropleth(m, census_gdf, census_overlay)
 
     # Custom cluster icon function - neutral dark blue color
     icon_create_function = """
@@ -158,9 +241,11 @@ def create_folium_map(stores_df: pd.DataFrame):
         control=False,
         icon_create_function=icon_create_function,
         options={
-            "maxClusterRadius": 50,
-            "disableClusteringAtZoom": 12,
-            "spiderfyOnMaxZoom": False,
+            "maxClusterRadius": 30,  # Tighter radius - markers must be very close to cluster
+            "spiderfyOnMaxZoom": True,
+            "zoomToBoundsOnClick": True,
+            "disableClusteringAtZoom": 12,  # Show individual markers at zoom 12+
+            "spiderfyDistanceMultiplier": 1.5,
         }
     )
 
@@ -186,7 +271,7 @@ def create_folium_map(stores_df: pd.DataFrame):
 
     marker_cluster.add_to(m)
 
-    # Fit bounds to data
+    # Fit bounds to data on initial load
     if len(stores_df) > 0:
         sw = [stores_df["latitude"].min(), stores_df["longitude"].min()]
         ne = [stores_df["latitude"].max(), stores_df["longitude"].max()]
@@ -293,7 +378,7 @@ def render_selection_screen(stores_df, brands, subcategories):
         st.rerun()
 
 
-def render_map_view(stores_df):
+def render_map_view(stores_df, census_gdf):
     """Render the map visualization with individual stores."""
 
     # Sidebar controls
@@ -312,10 +397,28 @@ def render_map_view(stores_df):
 
         st.divider()
 
+        # Census overlay selectbox - use session state to avoid triggering map resets
+        census_available = census_gdf is not None
+        if census_available:
+            census_overlay_option = st.selectbox(
+                "Census Overlay",
+                options=list(CENSUS_OVERLAYS.keys()),
+                index=list(CENSUS_OVERLAYS.keys()).index(st.session_state.census_overlay_option),
+                key="census_overlay_select",
+                help="Overlay Census tract data on the map"
+            )
+            # Update session state (does not trigger rerun)
+            st.session_state.census_overlay_option = census_overlay_option
+            census_overlay_column = CENSUS_OVERLAYS[census_overlay_option]
+        else:
+            st.info("Census data not available. Run scripts/fetch_census_data.py to enable overlays.")
+            census_overlay_column = None
+
+        st.divider()
+
         if st.button("Restart Analysis", type="secondary", use_container_width=True):
             st.session_state.analysis_phase = "selection"
             st.session_state.selected_state_code = None
-            st.session_state.map_bounds = None
             st.rerun()
 
         # Legend
@@ -333,6 +436,16 @@ def render_map_view(stores_df):
     if selected_state_code:
         filtered_df = filtered_df[filtered_df["state"] == selected_state_code]
 
+    # Filter census data by state if available and a state is selected
+    state_census_gdf = None
+    if census_gdf is not None and census_overlay_column is not None:
+        if selected_state_code:
+            state_census_gdf = census_gdf[census_gdf["state_abbrev"] == selected_state_code]
+        else:
+            # If no state filter, don't show census overlay (too much data)
+            st.sidebar.warning("Select a state to enable Census overlay")
+            census_overlay_column = None
+
     # Add color column based on brand categorization
     view_df = add_color_column(
         filtered_df,
@@ -346,28 +459,31 @@ def render_map_view(stores_df):
     # Create placeholders for metrics that will update
     metrics_container = st.container()
 
-    st.markdown("Hover over stores to see details. Zoom and pan to update statistics.")
+    st.markdown("Hover over stores to see details. Click on clusters to zoom in.")
 
-    # Create and display the map
-    m = create_folium_map(view_df)
+    # Use all census tracts for the selected state
+    filtered_census_gdf = state_census_gdf
+    if filtered_census_gdf is not None:
+        st.sidebar.caption(f"Showing {len(filtered_census_gdf):,} tracts")
 
-    # Display map and capture viewport changes
+    # Create the map
+    m = create_folium_map(view_df, filtered_census_gdf, census_overlay_column)
+
+    # Display map
+    # Use returned_objects=[] to prevent automatic Streamlit reruns on map interaction
+    # This fixes the issue where clicking a cluster would zoom in then immediately snap back
+    # because st_folium was triggering a rerun with the pre-animation bounds
     map_data = st_folium(
         m,
-        width=None,
+        use_container_width=True,
         height=600,
-        returned_objects=["bounds"],
+        returned_objects=[],  # No reruns on map interaction
         key="store_map",
     )
 
-    # Get current bounds from map interaction
-    current_bounds = map_data.get("bounds") if map_data else None
-
-    # Filter stores by current viewport bounds and calculate stats
-    if current_bounds:
-        viewport_df = filter_by_bounds(view_df, current_bounds)
-    else:
-        viewport_df = view_df
+    # Show stats for all visible stores (entire filtered dataset)
+    # Since we can't get real-time bounds without triggering reruns, show totals
+    viewport_df = view_df
 
     # Calculate stats for stores in current viewport
     results = categorize_stores(
@@ -379,7 +495,7 @@ def render_map_view(stores_df):
     # Display metrics in the container above the map
     with metrics_container:
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Stores in View", f"{results['total']:,}")
+        col1.metric("Total Stores", f"{results['total']:,}")
         col2.metric("With Focus Brand", f"{results['with_focus']:,}")
         col3.metric("Competitor Only", f"{results['competitor_only']:,}")
         col4.metric("Whitespace", f"{results['neither']:,}")
@@ -388,6 +504,7 @@ def render_map_view(stores_df):
 def main():
     # Load data
     stores_df, brands, subcategories = load_data()
+    census_gdf = load_census_data()
 
     # Initialize session state
     if "focus_brand" not in st.session_state:
@@ -402,12 +519,14 @@ def main():
         st.session_state.selected_state = "All States"
     if "selected_state_code" not in st.session_state:
         st.session_state.selected_state_code = None
+    if "census_overlay_option" not in st.session_state:
+        st.session_state.census_overlay_option = "None"
 
     # Route to appropriate view
     if st.session_state.analysis_phase == "selection":
         render_selection_screen(stores_df, brands, subcategories)
     else:
-        render_map_view(stores_df)
+        render_map_view(stores_df, census_gdf)
 
 
 if __name__ == "__main__":
