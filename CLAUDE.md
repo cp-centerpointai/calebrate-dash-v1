@@ -10,7 +10,7 @@ Store Distribution Analysis Dashboard - A Streamlit application for analyzing br
 
 ```bash
 # Activate virtual environment (required before running any Python)
-source venv/bin/activate
+source .venv/bin/activate  # or: source venv/bin/activate
 
 # Run the Streamlit dashboard
 streamlit run app.py
@@ -21,6 +21,13 @@ python preprocess.py
 # Fetch Census demographic data (requires CENSUS_API_KEY in .env)
 python scripts/fetch_census_data.py
 ```
+
+## Key Dependencies
+
+- `streamlit` + `streamlit-folium`: Dashboard framework and Folium map integration
+- `folium` + `branca`: Interactive mapping with MarkerCluster and color scales
+- `pandas` + `pyarrow`: Data handling with parquet support for list columns
+- `geopandas`: Census tract geometry processing
 
 ## Architecture
 
@@ -43,12 +50,15 @@ python scripts/fetch_census_data.py
 
 ### Application Flow
 
-1. **Selection Phase**: User selects focus brand, competitor brands, optional subcategory filter, and optional state filter
-2. **Map Phase**: Interactive Folium map displays stores with:
+The app uses a two-phase UI controlled by `st.session_state.analysis_phase`:
+
+1. **Selection Phase** (`render_selection_screen`): User selects focus brand, competitor brands, optional subcategory filter, and optional state filter. Clicking "Analyze" transitions to map phase.
+2. **Map Phase** (`render_map_view`): Interactive Folium map displays stores with:
    - Color-coded CircleMarkers (green=focus brand, red=competitor only, gray=whitespace)
-   - MarkerCluster for performance (neutral dark blue clusters, unclusters at zoom level 12)
-   - Optional Census choropleth overlays (income, age demographics, education)
-   - Metrics showing total stores, focus brand presence, competitor presence, whitespace
+   - MarkerCluster for performance (clusters at `maxClusterRadius: 30`, unclusters at zoom 12+)
+   - Optional Census choropleth overlays (requires state selection due to data volume)
+   - Sidebar controls for census overlay selection and "Restart Analysis" button
+   - Right-side panel showing viewport-filtered statistics that update on pan/zoom
 
 ### Store Categorization Logic
 

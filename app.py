@@ -200,20 +200,47 @@ def add_census_choropleth(m: folium.Map, census_gdf: gpd.GeoDataFrame, overlay_c
     colormap.add_to(m)
 
 
+def filter_by_bounds(df: pd.DataFrame, bounds: dict) -> pd.DataFrame:
+    """Filter dataframe to stores within the given map bounds."""
+    if not bounds:
+        return df
+
+    south = bounds["_southWest"]["lat"]
+    north = bounds["_northEast"]["lat"]
+    west = bounds["_southWest"]["lng"]
+    east = bounds["_northEast"]["lng"]
+
+    mask = (
+        (df["latitude"] >= south) &
+        (df["latitude"] <= north) &
+        (df["longitude"] >= west) &
+        (df["longitude"] <= east)
+    )
+    return df[mask]
+
+
 def create_folium_map(
     stores_df: pd.DataFrame,
     census_gdf: gpd.GeoDataFrame = None,
     census_overlay: str = None,
+    center: list = None,
+    zoom: int = None,
 ):
     """Create a Folium map with store markers and optional Census overlay."""
 
-    center_lat = stores_df["latitude"].mean()
-    center_lon = stores_df["longitude"].mean()
+    # Use provided center/zoom or calculate from data
+    if center is not None and zoom is not None:
+        center_lat, center_lon = center
+        zoom_start = zoom
+    else:
+        center_lat = stores_df["latitude"].mean()
+        center_lon = stores_df["longitude"].mean()
+        zoom_start = 7
 
     # Create base map
     m = folium.Map(
         location=[center_lat, center_lon],
-        zoom_start=7,
+        zoom_start=zoom_start,
         tiles="cartodbpositron",
     )
 
@@ -271,8 +298,8 @@ def create_folium_map(
 
     marker_cluster.add_to(m)
 
-    # Fit bounds to data on initial load
-    if len(stores_df) > 0:
+    # Only fit bounds on initial load (when no center/zoom provided)
+    if center is None and zoom is None and len(stores_df) > 0:
         sw = [stores_df["latitude"].min(), stores_df["longitude"].min()]
         ne = [stores_df["latitude"].max(), stores_df["longitude"].max()]
         m.fit_bounds([sw, ne])
@@ -419,14 +446,12 @@ def render_map_view(stores_df, census_gdf):
         if st.button("Restart Analysis", type="secondary", use_container_width=True):
             st.session_state.analysis_phase = "selection"
             st.session_state.selected_state_code = None
+            st.session_state.map_center = None
+            st.session_state.map_zoom = None
+            st.session_state.map_bounds = None
+            st.session_state.census_overlay_option = "None"
             st.rerun()
 
-        # Legend
-        st.divider()
-        st.markdown("**Legend**")
-        st.markdown("🟢 Has focus brand")
-        st.markdown("🔴 Competitor only")
-        st.markdown("⚫ Neither (whitespace)")
 
     # Filter stores by subcategory
     filtered_df = filter_stores(stores_df, st.session_state.subcategory)
@@ -456,34 +481,56 @@ def render_map_view(stores_df, census_gdf):
     # Main content
     st.title("Store Distribution Map")
 
-    # Create placeholders for metrics that will update
-    metrics_container = st.container()
-
-    st.markdown("Hover over stores to see details. Click on clusters to zoom in.")
+    st.caption("Hover over stores to see details.")
 
     # Use all census tracts for the selected state
     filtered_census_gdf = state_census_gdf
-    if filtered_census_gdf is not None:
-        st.sidebar.caption(f"Showing {len(filtered_census_gdf):,} tracts")
 
-    # Create the map
-    m = create_folium_map(view_df, filtered_census_gdf, census_overlay_column)
+    # Get saved center/zoom from session state (preserves view across reruns)
+    saved_center = st.session_state.get("map_center")
+    saved_zoom = st.session_state.get("map_zoom")
 
-    # Display map
-    # Use returned_objects=[] to prevent automatic Streamlit reruns on map interaction
-    # This fixes the issue where clicking a cluster would zoom in then immediately snap back
-    # because st_folium was triggering a rerun with the pre-animation bounds
-    map_data = st_folium(
-        m,
-        use_container_width=True,
-        height=600,
-        returned_objects=[],  # No reruns on map interaction
-        key="store_map",
+    # Create the map with preserved center/zoom if available
+    m = create_folium_map(
+        view_df,
+        filtered_census_gdf,
+        census_overlay_column,
+        center=saved_center,
+        zoom=saved_zoom
     )
 
-    # Show stats for all visible stores (entire filtered dataset)
-    # Since we can't get real-time bounds without triggering reruns, show totals
-    viewport_df = view_df
+    # Side-by-side layout: map on left, stats on right
+    map_col, stats_col = st.columns([3, 1])
+
+    with map_col:
+        # Display map and capture center/zoom/bounds
+        map_data = st_folium(
+            m,
+            use_container_width=True,
+            height=600,
+            returned_objects=["center", "zoom", "bounds"],
+            key="store_map",
+        )
+
+    # Save current center/zoom to session state for next rerun
+    if map_data and map_data.get("center"):
+        st.session_state.map_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
+    if map_data and map_data.get("zoom"):
+        st.session_state.map_zoom = map_data["zoom"]
+
+    # Get current bounds for filtering
+    current_bounds = map_data.get("bounds") if map_data else None
+
+    # Store bounds in session state for stats calculation
+    if current_bounds:
+        st.session_state.map_bounds = current_bounds
+
+    # Use stored bounds to filter stores for stats
+    stored_bounds = st.session_state.get("map_bounds")
+    if stored_bounds:
+        viewport_df = filter_by_bounds(view_df, stored_bounds)
+    else:
+        viewport_df = view_df
 
     # Calculate stats for stores in current viewport
     results = categorize_stores(
@@ -492,13 +539,20 @@ def render_map_view(stores_df, census_gdf):
         st.session_state.competitor_brands
     )
 
-    # Display metrics in the container above the map
-    with metrics_container:
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Stores", f"{results['total']:,}")
-        col2.metric("With Focus Brand", f"{results['with_focus']:,}")
-        col3.metric("Competitor Only", f"{results['competitor_only']:,}")
-        col4.metric("Whitespace", f"{results['neither']:,}")
+    with stats_col:
+        st.subheader("Stores in View")
+        st.metric(label="Total", value=f"{results['total']:,}", label_visibility="collapsed")
+
+        st.markdown("---")
+
+        st.markdown('<span style="color:#28a745;font-size:20px;">●</span> **With Focus Brand**', unsafe_allow_html=True)
+        st.metric(label="Focus", value=f"{results['with_focus']:,}", label_visibility="collapsed")
+
+        st.markdown('<span style="color:#dc3545;font-size:20px;">●</span> **Competitor Only**', unsafe_allow_html=True)
+        st.metric(label="Competitor", value=f"{results['competitor_only']:,}", label_visibility="collapsed")
+
+        st.markdown('<span style="color:#6c757d;font-size:20px;">●</span> **Whitespace**', unsafe_allow_html=True)
+        st.metric(label="Whitespace", value=f"{results['neither']:,}", label_visibility="collapsed")
 
 
 def main():
@@ -521,6 +575,12 @@ def main():
         st.session_state.selected_state_code = None
     if "census_overlay_option" not in st.session_state:
         st.session_state.census_overlay_option = "None"
+    if "map_center" not in st.session_state:
+        st.session_state.map_center = None
+    if "map_zoom" not in st.session_state:
+        st.session_state.map_zoom = None
+    if "map_bounds" not in st.session_state:
+        st.session_state.map_bounds = None
 
     # Route to appropriate view
     if st.session_state.analysis_phase == "selection":
