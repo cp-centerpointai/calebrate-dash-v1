@@ -129,6 +129,58 @@ def categorize_stores(
     }
 
 
+def categorize_stores_by_bracket(
+    df: pd.DataFrame,
+    focus_brand: str,
+    competitor_brands: list[str],
+    bracket_col: str = "income_bracket"
+) -> pd.DataFrame:
+    """
+    Categorize stores by demographic bracket with counts and percentages.
+    Returns DataFrame: bracket, total, with_focus, competitor_only,
+                       neither, focus_pct, competitor_pct, whitespace_pct
+    """
+    if bracket_col not in df.columns:
+        return pd.DataFrame()
+
+    df = df.copy()
+
+    # Create category masks
+    df["has_focus"] = df["all_brands"].apply(lambda b: focus_brand in b)
+    df["has_competitor"] = df["all_brands"].apply(
+        lambda b: any(c in b for c in competitor_brands)
+    )
+
+    # Assign mutually exclusive category
+    df["category"] = "neither"
+    df.loc[df["has_focus"], "category"] = "with_focus"
+    df.loc[~df["has_focus"] & df["has_competitor"], "category"] = "competitor_only"
+
+    # Group by bracket and category
+    grouped = df.groupby([bracket_col, "category"]).size().unstack(fill_value=0)
+
+    for col in ["with_focus", "competitor_only", "neither"]:
+        if col not in grouped.columns:
+            grouped[col] = 0
+
+    grouped["total"] = grouped["with_focus"] + grouped["competitor_only"] + grouped["neither"]
+    grouped["focus_pct"] = (grouped["with_focus"] / grouped["total"] * 100).round(1)
+    grouped["competitor_pct"] = (grouped["competitor_only"] / grouped["total"] * 100).round(1)
+    grouped["whitespace_pct"] = (grouped["neither"] / grouped["total"] * 100).round(1)
+
+    result = grouped.reset_index()
+    result = result.rename(columns={bracket_col: "bracket"})
+
+    # Sort by quintile prefix (Q1, Q2, ..., then Unknown)
+    def sort_key(label):
+        if label == "Unknown":
+            return (1, "")
+        return (0, label)  # Q1, Q2, etc. sort naturally
+
+    result = result.sort_values("bracket", key=lambda x: x.map(sort_key))
+    return result
+
+
 def add_census_choropleth(m: folium.Map, census_gdf: gpd.GeoDataFrame, overlay_column: str):
     """Add a Census choropleth layer to the map."""
     # Filter out null values for the overlay column
@@ -499,8 +551,8 @@ def render_map_view(stores_df, census_gdf):
         zoom=saved_zoom
     )
 
-    # Side-by-side layout: map on left, stats on right
-    map_col, stats_col = st.columns([3, 1])
+    # Side-by-side layout: map on left (65%), stats on right (35%)
+    map_col, stats_col = st.columns([65, 35])
 
     with map_col:
         # Display map and capture center/zoom/bounds
@@ -540,19 +592,107 @@ def render_map_view(stores_df, census_gdf):
     )
 
     with stats_col:
-        st.subheader("Stores in View")
-        st.metric(label="Total", value=f"{results['total']:,}", label_visibility="collapsed")
+        tab_summary, tab_census = st.tabs(["Summary", "Census Breakdown"])
 
-        st.markdown("---")
+        with tab_summary:
+            st.subheader("Stores in View")
 
-        st.markdown('<span style="color:#28a745;font-size:20px;">●</span> **With Focus Brand**', unsafe_allow_html=True)
-        st.metric(label="Focus", value=f"{results['with_focus']:,}", label_visibility="collapsed")
+            # Calculate percentages for display
+            total = results['total']
+            if total > 0:
+                focus_pct = results['with_focus'] / total * 100
+                comp_pct = results['competitor_only'] / total * 100
+                white_pct = results['neither'] / total * 100
+            else:
+                focus_pct = comp_pct = white_pct = 0
 
-        st.markdown('<span style="color:#dc3545;font-size:20px;">●</span> **Competitor Only**', unsafe_allow_html=True)
-        st.metric(label="Competitor", value=f"{results['competitor_only']:,}", label_visibility="collapsed")
+            # Clean card-style layout
+            st.markdown(f"### {total:,}")
+            st.caption("Total stores in view")
 
-        st.markdown('<span style="color:#6c757d;font-size:20px;">●</span> **Whitespace**', unsafe_allow_html=True)
-        st.metric(label="Whitespace", value=f"{results['neither']:,}", label_visibility="collapsed")
+            st.markdown("---")
+
+            # Focus brand row
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown("🟢 **With Focus Brand**")
+            with col2:
+                st.markdown(f"**{results['with_focus']:,}**")
+            st.caption(f"{focus_pct:.1f}% of stores in view")
+
+            st.markdown("")
+
+            # Competitor row
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown("🔴 **Competitor Only**")
+            with col2:
+                st.markdown(f"**{results['competitor_only']:,}**")
+            st.caption(f"{comp_pct:.1f}% of stores in view")
+
+            st.markdown("")
+
+            # Whitespace row
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown("⚪ **Whitespace**")
+            with col2:
+                st.markdown(f"**{results['neither']:,}**")
+            st.caption(f"{white_pct:.1f}% of stores in view")
+
+        with tab_census:
+            # Get current census overlay selection
+            census_selection = st.session_state.get("census_overlay_option", "None")
+
+            if census_selection == "None":
+                st.info("Select a Census Overlay from the sidebar to see demographic breakdown.")
+            else:
+                # Map overlay selection to bracket column and display title
+                overlay_config = {
+                    "Median Household Income": ("income_bracket", "By Household Income"),
+                    "% Population 21-34": ("age_bracket", "By Young Adult Population (21-34)"),
+                    "% College Educated": ("education_bracket", "By College Education"),
+                }
+
+                bracket_col, title = overlay_config.get(census_selection, (None, None))
+
+                if bracket_col is None or bracket_col not in viewport_df.columns:
+                    st.warning("Run `python preprocess.py` to enable census analytics.")
+                else:
+                    st.subheader(title)
+                    bracket_stats = categorize_stores_by_bracket(
+                        viewport_df,
+                        st.session_state.focus_brand,
+                        st.session_state.competitor_brands,
+                        bracket_col=bracket_col
+                    )
+
+                    if len(bracket_stats) > 0:
+                        display_df = bracket_stats[[
+                            "bracket", "total", "focus_pct", "competitor_pct", "whitespace_pct"
+                        ]].copy()
+                        display_df.columns = ["Bracket", "Stores", "Focus %", "Competitor %", "Whitespace %"]
+
+                        st.dataframe(
+                            display_df,
+                            hide_index=True,
+                            use_container_width=True,
+                            column_config={
+                                "Bracket": st.column_config.TextColumn("Bracket"),
+                                "Stores": st.column_config.NumberColumn("Stores", format="%d"),
+                                "Focus %": st.column_config.NumberColumn("Focus %", format="%.1f%%"),
+                                "Competitor %": st.column_config.NumberColumn("Competitor %", format="%.1f%%"),
+                                "Whitespace %": st.column_config.NumberColumn("Whitespace %", format="%.1f%%"),
+                            }
+                        )
+
+                        # Note about unknown data
+                        unknown = bracket_stats[bracket_stats["bracket"] == "Unknown"]
+                        if len(unknown) > 0 and unknown["total"].iloc[0] > 0:
+                            unk_count = unknown["total"].iloc[0]
+                            st.caption(f"*{unk_count:,} stores lack census data*")
+                    else:
+                        st.info("No stores in current view.")
 
 
 def main():

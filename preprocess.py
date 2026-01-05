@@ -8,6 +8,7 @@ Run this script once when data changes:
 """
 
 import pandas as pd
+import numpy as np
 import json
 from pathlib import Path
 
@@ -22,9 +23,59 @@ def parse_comma_delimited(value: str) -> list[str]:
     return [item.strip() for item in str(value).split(",") if item.strip()]
 
 
+def assign_quintiles(df: pd.DataFrame, col: str, bracket_col: str, format_func) -> pd.DataFrame:
+    """
+    Assign quintile labels for any numeric column.
+    Each quintile has ~20% of stores with valid data.
+    """
+    valid_data = df[col].dropna()
+    if len(valid_data) == 0:
+        df[bracket_col] = "Unknown"
+        return df
+
+    quintiles = np.percentile(valid_data, [20, 40, 60, 80])
+
+    def get_label(value):
+        if pd.isna(value):
+            return "Unknown"
+        if value < quintiles[0]:
+            return f"Q1 ({format_func(None, quintiles[0], 'lt')})"
+        elif value < quintiles[1]:
+            return f"Q2 ({format_func(quintiles[0], quintiles[1], 'range')})"
+        elif value < quintiles[2]:
+            return f"Q3 ({format_func(quintiles[1], quintiles[2], 'range')})"
+        elif value < quintiles[3]:
+            return f"Q4 ({format_func(quintiles[2], quintiles[3], 'range')})"
+        else:
+            return f"Q5 ({format_func(quintiles[3], None, 'gt')})"
+
+    df[bracket_col] = df[col].apply(get_label)
+    return df, quintiles
+
+
+def format_income(low, high, mode):
+    """Format income values for bracket labels."""
+    if mode == 'lt':
+        return f"< ${high/1000:.0f}K"
+    elif mode == 'gt':
+        return f"> ${low/1000:.0f}K"
+    else:
+        return f"${low/1000:.0f}K-${high/1000:.0f}K"
+
+
+def format_percent(low, high, mode):
+    """Format percentage values for bracket labels."""
+    if mode == 'lt':
+        return f"< {high:.0f}%"
+    elif mode == 'gt':
+        return f"> {low:.0f}%"
+    else:
+        return f"{low:.0f}%-{high:.0f}%"
+
+
 def main():
     # Paths
-    input_csv = Path("sample.csv")
+    input_csv = Path("sample_with_census_ids.csv")
     output_dir = Path("data")
     output_dir.mkdir(exist_ok=True)
 
@@ -60,9 +111,56 @@ def main():
     df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
     df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
 
-    # Drop source_file column if present (not needed for dashboard)
-    if "source_file" in df.columns:
-        df = df.drop(columns=["source_file"])
+    # Join census demographic data for stratified analytics
+    print("Joining census demographic data...")
+    census_path = Path("data/census_tracts.parquet")
+    if census_path.exists():
+        # Load all demographic columns (skip geometry for performance)
+        census_df = pd.read_parquet(
+            census_path,
+            columns=["GEOID", "median_hh_income", "pct_pop_21_34", "pct_college_educated"]
+        )
+
+        # Format tract_geoid to 11-char string for join
+        df["tract_geoid"] = df["tract_geoid"].apply(
+            lambda x: str(int(float(x))).zfill(11) if pd.notna(x) and x != "" else None
+        )
+
+        # Merge on tract_geoid = GEOID
+        df = df.merge(census_df, left_on="tract_geoid", right_on="GEOID", how="left")
+        df = df.drop(columns=["GEOID"], errors="ignore")
+
+        matched = df["median_hh_income"].notna().sum()
+        print(f"  Matched {matched:,} stores ({matched/len(df)*100:.1f}%) with census data")
+
+        # Assign quintiles for all three demographics
+        print("Assigning demographic quintiles...")
+
+        # Income brackets
+        df, income_q = assign_quintiles(df, "median_hh_income", "income_bracket", format_income)
+        print(f"  Income thresholds: {[f'${q/1000:.0f}K' for q in income_q]}")
+
+        # Age (21-34) brackets
+        df, age_q = assign_quintiles(df, "pct_pop_21_34", "age_bracket", format_percent)
+        print(f"  Age 21-34 thresholds: {[f'{q:.1f}%' for q in age_q]}")
+
+        # Education brackets
+        df, edu_q = assign_quintiles(df, "pct_college_educated", "education_bracket", format_percent)
+        print(f"  College educated thresholds: {[f'{q:.1f}%' for q in edu_q]}")
+
+    else:
+        print("Warning: Census data not found. Skipping demographic bracket assignment.")
+        df["tract_geoid"] = None
+        df["median_hh_income"] = None
+        df["pct_pop_21_34"] = None
+        df["pct_college_educated"] = None
+        df["income_bracket"] = "Unknown"
+        df["age_bracket"] = "Unknown"
+        df["education_bracket"] = "Unknown"
+
+    # Drop columns not needed for dashboard
+    drop_cols = ["source_file", "state_fips", "county_fips", "block_geoid", "block_group", "block", "Unnamed: 0"]
+    df = df.drop(columns=[c for c in drop_cols if c in df.columns])
 
     # Create brand lookup table: distinct brands sorted alphabetically
     print("Creating brand lookup table...")
