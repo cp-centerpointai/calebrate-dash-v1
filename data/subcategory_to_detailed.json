@@ -1,0 +1,325 @@
+{
+  "Adult Entertainment": [
+    "All",
+    "Adult Entertainment"
+  ],
+  "Alternative Lodging": [
+    "All",
+    "Campground"
+  ],
+  "Auto Service": [
+    "All",
+    "Auto Service Center"
+  ],
+  "Automotive": [
+    "All",
+    "Auto Parts Store",
+    "Car Accessories",
+    "Tire Shop"
+  ],
+  "Bakery": [
+    "All",
+    "Bakery"
+  ],
+  "Bar & Nightlife": [
+    "All",
+    "Bar",
+    "Beer Garden",
+    "Brewery",
+    "Live Music Venue",
+    "Lounge",
+    "Pub",
+    "Sports Bar",
+    "Wine Bar"
+  ],
+  "Beauty Supply": [
+    "All",
+    "Beauty Supply Store"
+  ],
+  "Beverage Retail": [
+    "All",
+    "Liquor Store",
+    "Wine & Spirits"
+  ],
+  "Books & Media": [
+    "All",
+    "Bookstore"
+  ],
+  "Building Materials": [
+    "All",
+    "Flooring Store"
+  ],
+  "Car Wash": [
+    "All",
+    "Car Wash"
+  ],
+  "Coffee & Cafe": [
+    "All",
+    "Cafe",
+    "Coffee Shop",
+    "Donut Shop"
+  ],
+  "Convenience": [
+    "All",
+    "Convenience Store",
+    "Gas Station Convenience",
+    "General Store"
+  ],
+  "Convenience Store": [
+    "All",
+    "Convenience Store",
+    "Delivery Service",
+    "Gas Station C-Store",
+    "Gas Station Convenience"
+  ],
+  "Department Store": [
+    "All",
+    "Department Store"
+  ],
+  "Dessert & Ice Cream": [
+    "All",
+    "Dessert Shop"
+  ],
+  "Discount Store": [
+    "All",
+    "Discount Store"
+  ],
+  "Electronics": [
+    "All",
+    "Electronics Store"
+  ],
+  "Entertainment Venues": [
+    "All",
+    "Aquarium",
+    "Arcade",
+    "Board Game Cafe",
+    "Bowling Alley",
+    "Dinner Theater",
+    "Movie Theater"
+  ],
+  "Ethnic & International": [
+    "All",
+    "Asian Supermarket",
+    "Filipino Market",
+    "Korean Market",
+    "Latino Supermarket"
+  ],
+  "Event Venues": [
+    "All",
+    "Special Event Venue"
+  ],
+  "Fast Casual": [
+    "All",
+    "Asian Fast Casual",
+    "Bowl Restaurant",
+    "Fast Casual",
+    "Fast Casual Restaurant",
+    "Mediterranean Fast Casual",
+    "Mexican Fast Casual"
+  ],
+  "Fitness Center": [
+    "All",
+    "Gym"
+  ],
+  "Foodservice": [
+    "All",
+    "Airport Concessions",
+    "Institutional Catering"
+  ],
+  "Footwear": [
+    "All",
+    "Shoe Store"
+  ],
+  "Full Service Restaurant": [
+    "All",
+    "American",
+    "Argentinian",
+    "Asian Fusion",
+    "BBQ",
+    "Brazilian",
+    "Breakfast/Brunch",
+    "Cajun/Creole",
+    "Caribbean",
+    "Casual Dining",
+    "Chinese",
+    "Ethiopian",
+    "European",
+    "Family Restaurant",
+    "Greek",
+    "Indian",
+    "Italian",
+    "Japanese",
+    "Korean",
+    "Latin American",
+    "Mediterranean",
+    "Mexican",
+    "Pan-Asian",
+    "Peruvian",
+    "Pizza/Pizzeria",
+    "Puerto Rican",
+    "Seafood",
+    "Southern",
+    "Southwestern",
+    "Spanish",
+    "Steakhouse",
+    "Thai",
+    "Vietnamese"
+  ],
+  "Furniture": [
+    "All",
+    "Furniture Store"
+  ],
+  "Gift & Specialty": [
+    "All",
+    "Party Supply Store"
+  ],
+  "Golf": [
+    "All",
+    "Golf Course",
+    "Golf Simulator",
+    "Mini Golf"
+  ],
+  "Grocery Store": [
+    "All",
+    "Butcher Shop",
+    "Grocery Store"
+  ],
+  "Hair Care": [
+    "All",
+    "Barbershop"
+  ],
+  "Hardware": [
+    "All",
+    "Hardware Store",
+    "Home Center"
+  ],
+  "Home Goods": [
+    "All",
+    "Home Decor Store"
+  ],
+  "Hotels": [
+    "All",
+    "Hotel",
+    "Motel",
+    "Resort"
+  ],
+  "Jewelry & Accessories": [
+    "All",
+    "Eyewear Store",
+    "Jewelry Store"
+  ],
+  "Liquor Store": [
+    "All",
+    "Liquor Store"
+  ],
+  "Membership Organizations": [
+    "All",
+    "Fraternal Organization",
+    "Veterans Organization"
+  ],
+  "Office & Stationery": [
+    "All",
+    "Craft Store",
+    "Office Supply Store"
+  ],
+  "Other Specialty": [
+    "All",
+    "Smoke Shop",
+    "Tobacco Shop",
+    "Vape Shop"
+  ],
+  "Pet Supplies": [
+    "All",
+    "Pet Store"
+  ],
+  "Pharmacy": [
+    "All",
+    "Drugstore",
+    "Pharmacy",
+    "Vitamin & Supplement Store"
+  ],
+  "Private Clubs": [
+    "All",
+    "Country Club",
+    "Social Club"
+  ],
+  "Public Transportation": [
+    "All",
+    "Train Station"
+  ],
+  "Quick Service Restaurant (QSR)": [
+    "All",
+    "BBQ",
+    "Burger",
+    "Chicken",
+    "Chinese",
+    "Deli",
+    "Fast Food",
+    "Hot Dog",
+    "Latin American",
+    "Mexican QSR",
+    "Pizza",
+    "Sub/Hoagie Shop",
+    "Taco/Burrito"
+  ],
+  "Recreation": [
+    "All",
+    "Arcade",
+    "Axe Throwing",
+    "Casino",
+    "Darts/Games",
+    "Escape Room",
+    "Esports Arena",
+    "Go-Kart Racing",
+    "Golf Simulator",
+    "Mini Golf",
+    "Paint & Sip",
+    "Pool/Billiards Hall",
+    "Sports Complex",
+    "Trampoline Park",
+    "Whirlyball"
+  ],
+  "Specialty Food": [
+    "All",
+    "Butcher Shop",
+    "Gourmet Food Store",
+    "Meat Market"
+  ],
+  "Sporting Goods": [
+    "All",
+    "Fishing Store",
+    "Outdoor Gear Store",
+    "Sporting Goods Store"
+  ],
+  "Supermarket": [
+    "All",
+    "Discount Supermarket",
+    "Ethnic Supermarket",
+    "National Supermarket Chain",
+    "Natural Supermarket",
+    "Online Grocery",
+    "Regional Supermarket Chain",
+    "Supermarket"
+  ],
+  "Uncategorized": [
+    "All",
+    "Unknown",
+    "Uncategorized"
+  ],
+  "Warehouse & Bulk": [
+    "All",
+    "Bulk Foods Store",
+    "Premium Warehouse Club",
+    "Regional Warehouse Club",
+    "Value Warehouse Club"
+  ],
+  "Warehousing & Distribution": [
+    "All",
+    "Beverage Distributor",
+    "Fulfillment Center"
+  ],
+  "Wellness": [
+    "All",
+    "Yoga/Wellness Studio"
+  ]
+}

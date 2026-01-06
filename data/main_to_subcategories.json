@@ -1,0 +1,109 @@
+{
+  "Apparel & Accessories": [
+    "All",
+    "Footwear"
+  ],
+  "Automotive": [
+    "All",
+    "Auto Service",
+    "Car Wash"
+  ],
+  "Convenience & Gas": [
+    "All",
+    "Convenience Store"
+  ],
+  "Entertainment & Leisure": [
+    "All",
+    "Bar & Nightlife",
+    "Entertainment Venues",
+    "Recreation"
+  ],
+  "Food & Beverage": [
+    "All",
+    "Bakery",
+    "Bar & Nightlife",
+    "Coffee & Cafe",
+    "Convenience Store",
+    "Dessert & Ice Cream",
+    "Fast Casual",
+    "Foodservice",
+    "Full Service Restaurant",
+    "Quick Service Restaurant (QSR)"
+  ],
+  "General Merchandise": [
+    "All",
+    "Department Store",
+    "Discount Store"
+  ],
+  "Grocery & Food Retail": [
+    "All",
+    "Beverage Retail",
+    "Convenience",
+    "Ethnic & International",
+    "Grocery Store",
+    "Liquor Store",
+    "Pharmacy",
+    "Specialty Food",
+    "Supermarket",
+    "Warehouse & Bulk"
+  ],
+  "Health & Beauty": [
+    "All",
+    "Beauty Supply",
+    "Pharmacy"
+  ],
+  "Health & Fitness": [
+    "All",
+    "Fitness Center",
+    "Wellness"
+  ],
+  "Home Improvement": [
+    "All",
+    "Building Materials",
+    "Furniture",
+    "Hardware"
+  ],
+  "Lodging & Hospitality": [
+    "All",
+    "Alternative Lodging",
+    "Hotels"
+  ],
+  "Other": [
+    "All",
+    "Adult Entertainment",
+    "Event Venues",
+    "Membership Organizations",
+    "Private Clubs",
+    "Warehousing & Distribution",
+    "Uncategorized"
+  ],
+  "Personal Services": [
+    "All",
+    "Hair Care"
+  ],
+  "Recreation & Entertainment": [
+    "All",
+    "Golf"
+  ],
+  "Specialty Retail": [
+    "All",
+    "Automotive",
+    "Books & Media",
+    "Electronics",
+    "Gift & Specialty",
+    "Home Goods",
+    "Jewelry & Accessories",
+    "Office & Stationery",
+    "Other Specialty",
+    "Pet Supplies",
+    "Sporting Goods"
+  ],
+  "Transportation & Logistics": [
+    "All",
+    "Public Transportation"
+  ],
+  "Uncategorized": [
+    "All",
+    "Uncategorized"
+  ]
+}

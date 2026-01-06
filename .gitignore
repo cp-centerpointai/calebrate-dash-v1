@@ -9,10 +9,9 @@ __pycache__/
 *.so
 .Python
 
-# Data files (large, should not be in git)
+# Raw data files (large, not needed for deployment)
 sample.csv
 sample_with_census_ids.csv
-data/
 
 # IDE
 .idea/
