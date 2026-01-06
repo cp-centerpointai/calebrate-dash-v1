@@ -1,5 +1,6 @@
 # Virtual environment
 venv/
+.venv/
 
 # Python
 __pycache__/
@@ -10,6 +11,7 @@ __pycache__/
 
 # Data files (large, should not be in git)
 sample.csv
+sample_with_census_ids.csv
 data/
 
 # IDE
