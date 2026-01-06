@@ -1,5 +1,8 @@
 """
-Store Distribution Analysis Dashboard - Map Visualization with Folium
+Coors Edge Distribution Analysis Dashboard
+
+Analyzes Coors Edge distribution vs Athletic Brewing competition
+within the Coors distribution network.
 
 Run with:
     streamlit run app.py
@@ -15,10 +18,21 @@ from streamlit_folium import st_folium
 from pathlib import Path
 import branca.colormap as cm
 
+# Fixed brand configuration
+FOCUS_BRAND = "Coors Edge"
+COMPETITOR_BRAND = "Athletic Brewing"
+
+# Store category colors
+CATEGORY_COLORS = {
+    "both": "#9b59b6",           # Purple - has both brands
+    "coors_edge_only": "#27ae60", # Green - Coors Edge only
+    "athletic_only": "#e74c3c",   # Red - Athletic only
+    "neither": "#95a5a6",         # Gray - whitespace
+}
 
 # Page configuration
 st.set_page_config(
-    page_title="Store Distribution Analysis",
+    page_title="Coors Edge Distribution Analysis",
     layout="wide",
 )
 
@@ -28,17 +42,20 @@ def load_data():
     """Load preprocessed data files."""
     data_dir = Path("data")
 
-    # Load parquet store data
+    # Load parquet store data (includes pre-computed store_category)
     stores_df = pd.read_parquet(data_dir / "stores.parquet")
 
-    # Load lookup tables
-    with open(data_dir / "brands.json") as f:
-        brands = json.load(f)
+    # Load category hierarchy lookups
+    with open(data_dir / "main_categories.json") as f:
+        main_categories = json.load(f)
 
-    with open(data_dir / "subcategories.json") as f:
-        subcategories = json.load(f)
+    with open(data_dir / "main_to_subcategories.json") as f:
+        main_to_sub = json.load(f)
 
-    return stores_df, brands, subcategories
+    with open(data_dir / "subcategory_to_detailed.json") as f:
+        sub_to_detailed = json.load(f)
+
+    return stores_df, main_categories, main_to_sub, sub_to_detailed
 
 
 @st.cache_data
@@ -63,122 +80,88 @@ CENSUS_OVERLAYS = {
 }
 
 
-def filter_stores(df: pd.DataFrame, subcategory: str) -> pd.DataFrame:
-    """Filter stores by subcategory."""
-    if subcategory == "All":
-        return df
-    return df[df["subcategory"] == subcategory]
+def filter_stores(
+    df: pd.DataFrame,
+    main_category: str = "All",
+    subcategory: str = "All",
+    detailed_category: str = "All"
+) -> pd.DataFrame:
+    """Filter stores by category hierarchy."""
+    result = df
+    if main_category != "All":
+        result = result[result["main_category"] == main_category]
+    if subcategory != "All":
+        result = result[result["subcategory"] == subcategory]
+    if detailed_category != "All":
+        result = result[result["detailed_category"] == detailed_category]
+    return result
 
 
-def get_store_color(store_brands, focus_brand: str, competitor_brands: list) -> str:
-    """
-    Returns color string based on brand presence.
-    - Green: Store carries the focus brand
-    - Red: Store carries competitor brand(s) but NOT focus brand
-    - Grey: Store carries neither (whitespace)
-    """
-    has_focus = focus_brand in store_brands
-    has_competitor = any(comp in store_brands for comp in competitor_brands)
-
-    if has_focus:
-        return "green"
-    elif has_competitor:
-        return "red"
-    else:
-        return "gray"
-
-
-def add_color_column(df: pd.DataFrame, focus_brand: str, competitor_brands: list) -> pd.DataFrame:
-    """Add color column based on brand categorization."""
+def add_color_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Add color column based on pre-computed store_category."""
     df = df.copy()
-    df["color"] = df["all_brands"].apply(
-        lambda brands: get_store_color(brands, focus_brand, competitor_brands)
-    )
+    df["color"] = df["store_category"].map(CATEGORY_COLORS)
     return df
 
 
-def categorize_stores(
-    df: pd.DataFrame,
-    focus_brand: str,
-    competitor_brands: list[str]
-) -> dict:
+def get_category_stats(df: pd.DataFrame) -> dict:
     """
-    Categorize stores into three groups:
-    - With focus brand
-    - Competitor only (has competitor brand(s) but not focus brand)
-    - Neither (whitespace - no focus or competitor brands)
+    Get store counts by category using pre-computed store_category column.
+    Returns counts for: both, coors_edge_only, athletic_only, neither
     """
-    def has_focus(brands_list):
-        return focus_brand in brands_list
-
-    def has_any_competitor(brands_list):
-        return any(comp in brands_list for comp in competitor_brands)
-
-    has_focus_mask = df["all_brands"].apply(has_focus)
-    has_competitor_mask = df["all_brands"].apply(has_any_competitor)
-
-    with_focus = has_focus_mask.sum()
-    competitor_only = (~has_focus_mask & has_competitor_mask).sum()
-    neither = (~has_focus_mask & ~has_competitor_mask).sum()
-
+    counts = df["store_category"].value_counts()
     return {
         "total": len(df),
-        "with_focus": with_focus,
-        "competitor_only": competitor_only,
-        "neither": neither,
+        "both": counts.get("both", 0),
+        "coors_edge_only": counts.get("coors_edge_only", 0),
+        "athletic_only": counts.get("athletic_only", 0),
+        "neither": counts.get("neither", 0),
     }
 
 
 def categorize_stores_by_bracket(
     df: pd.DataFrame,
-    focus_brand: str,
-    competitor_brands: list[str],
     bracket_col: str = "income_bracket"
 ) -> pd.DataFrame:
     """
     Categorize stores by demographic bracket with counts and percentages.
-    Returns DataFrame: bracket, total, with_focus, competitor_only,
-                       neither, focus_pct, competitor_pct, whitespace_pct
+    Uses pre-computed store_category column.
     """
     if bracket_col not in df.columns:
         return pd.DataFrame()
 
+    # Map store_category to analysis categories
+    # For the table, we show: coors_edge (both + coors_edge_only), athletic_only, neither
     df = df.copy()
+    df["has_coors"] = df["store_category"].isin(["both", "coors_edge_only"])
+    df["athletic_only_flag"] = df["store_category"] == "athletic_only"
+    df["neither_flag"] = df["store_category"] == "neither"
 
-    # Create category masks
-    df["has_focus"] = df["all_brands"].apply(lambda b: focus_brand in b)
-    df["has_competitor"] = df["all_brands"].apply(
-        lambda b: any(c in b for c in competitor_brands)
-    )
+    # Group by bracket
+    grouped = df.groupby(bracket_col).agg(
+        total=("store_id", "count"),
+        with_coors_edge=("has_coors", "sum"),
+        with_both=("store_category", lambda x: (x == "both").sum()),
+        athletic_only=("athletic_only_flag", "sum"),
+        neither=("neither_flag", "sum"),
+    ).reset_index()
 
-    # Assign mutually exclusive category
-    df["category"] = "neither"
-    df.loc[df["has_focus"], "category"] = "with_focus"
-    df.loc[~df["has_focus"] & df["has_competitor"], "category"] = "competitor_only"
+    grouped = grouped.rename(columns={bracket_col: "bracket"})
 
-    # Group by bracket and category
-    grouped = df.groupby([bracket_col, "category"]).size().unstack(fill_value=0)
-
-    for col in ["with_focus", "competitor_only", "neither"]:
-        if col not in grouped.columns:
-            grouped[col] = 0
-
-    grouped["total"] = grouped["with_focus"] + grouped["competitor_only"] + grouped["neither"]
-    grouped["focus_pct"] = (grouped["with_focus"] / grouped["total"] * 100).round(1)
-    grouped["competitor_pct"] = (grouped["competitor_only"] / grouped["total"] * 100).round(1)
+    # Calculate percentages
+    grouped["coors_pct"] = (grouped["with_coors_edge"] / grouped["total"] * 100).round(1)
+    grouped["both_pct"] = (grouped["with_both"] / grouped["total"] * 100).round(1)
+    grouped["athletic_pct"] = (grouped["athletic_only"] / grouped["total"] * 100).round(1)
     grouped["whitespace_pct"] = (grouped["neither"] / grouped["total"] * 100).round(1)
-
-    result = grouped.reset_index()
-    result = result.rename(columns={bracket_col: "bracket"})
 
     # Sort by quintile prefix (Q1, Q2, ..., then Unknown)
     def sort_key(label):
         if label == "Unknown":
             return (1, "")
-        return (0, label)  # Q1, Q2, etc. sort naturally
+        return (0, label)
 
-    result = result.sort_values("bracket", key=lambda x: x.map(sort_key))
-    return result
+    grouped = grouped.sort_values("bracket", key=lambda x: x.map(sort_key))
+    return grouped
 
 
 def add_census_choropleth(m: folium.Map, census_gdf: gpd.GeoDataFrame, overlay_column: str):
@@ -359,55 +342,98 @@ def create_folium_map(
     return m
 
 
-def render_selection_screen(stores_df, brands, subcategories):
-    """Render the brand/competitor selection screen with state selection."""
+def reset_filters():
+    """Callback to reset all filters before widgets are instantiated."""
+    # Reset category hierarchy
+    st.session_state.main_category = "All"
+    st.session_state.subcategory = "All"
+    st.session_state.detailed_category = "All"
+    # Reset widget keys for category selectors
+    st.session_state.main_category_select = "All"
+    st.session_state.subcategory_select = "All"
+    st.session_state.detailed_category_select = "All"
+    # Reset state filter
+    st.session_state.selected_state = "All States"
+    st.session_state.selected_state_code = None
+    st.session_state.state_selector = "All States"
+    # Reset census overlay
+    st.session_state.census_overlay_option = "None"
+    st.session_state.census_overlay_select = "None"
+    # Reset map state
+    st.session_state.show_map = False
+    st.session_state.viewport_bounds = None
 
-    st.title("Store Distribution Analysis")
-    st.subheader("Selection Controls")
 
-    col1, col2 = st.columns(2)
+def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, census_gdf):
+    """Render the map visualization with individual stores."""
 
-    with col1:
-        focus_brand = st.selectbox(
-            "Select Focus Brand",
-            options=[""] + brands,
-            index=0,
-            key="focus_brand_select",
-            help="Required: Select the primary brand to analyze"
+    # Handle reset request before widgets are instantiated
+    if st.session_state.get("reset_requested", False):
+        reset_filters()
+        st.session_state.reset_requested = False
+
+    # Sidebar controls
+    with st.sidebar:
+        st.header("Coors Edge Analysis")
+
+        st.markdown(f"""
+**Focus:** {FOCUS_BRAND}
+
+**Competitor:** {COMPETITOR_BRAND}
+        """)
+
+        st.divider()
+
+        # Main Category selector
+        main_category = st.selectbox(
+            "Main Category",
+            options=main_categories,
+            index=main_categories.index(st.session_state.main_category) if st.session_state.main_category in main_categories else 0,
+            key="main_category_select",
+            help="Filter stores by main category"
         )
+        # Reset child selections if main category changed
+        if main_category != st.session_state.main_category:
+            st.session_state.subcategory = "All"
+            st.session_state.detailed_category = "All"
+        st.session_state.main_category = main_category
 
-        if focus_brand:
-            st.session_state.focus_brand = focus_brand
+        # Subcategory selector (only show if main category is selected)
+        if main_category != "All":
+            subcategory_options = main_to_sub.get(main_category, ["All"])
+            subcategory = st.selectbox(
+                "Subcategory",
+                options=subcategory_options,
+                index=subcategory_options.index(st.session_state.subcategory) if st.session_state.subcategory in subcategory_options else 0,
+                key="subcategory_select",
+                help="Filter stores by subcategory"
+            )
+            # Reset detailed_category if subcategory changed
+            if subcategory != st.session_state.subcategory:
+                st.session_state.detailed_category = "All"
+            st.session_state.subcategory = subcategory
         else:
-            st.session_state.focus_brand = None
+            subcategory = "All"
+            st.session_state.subcategory = "All"
 
-    with col2:
-        available_competitors = [b for b in brands if b != focus_brand]
-        competitor_brands = st.multiselect(
-            "Select Competitor Brands",
-            options=available_competitors,
-            default=[],
-            key="competitor_brands_select",
-            help="Required: Select at least one competitor brand"
-        )
-        st.session_state.competitor_brands = competitor_brands
+        # Detailed Category selector (only show if subcategory is selected)
+        if subcategory != "All":
+            detailed_options = sub_to_detailed.get(subcategory, ["All"])
+            detailed_category = st.selectbox(
+                "Detailed Category",
+                options=detailed_options,
+                index=detailed_options.index(st.session_state.detailed_category) if st.session_state.detailed_category in detailed_options else 0,
+                key="detailed_category_select",
+                help="Filter stores by detailed category"
+            )
+            st.session_state.detailed_category = detailed_category
+        else:
+            detailed_category = "All"
+            st.session_state.detailed_category = "All"
 
-    col3, col4 = st.columns(2)
-
-    with col3:
-        subcategory = st.selectbox(
-            "Filter by Store Subcategory (optional)",
-            options=subcategories,
-            index=0,
-            key="subcategory_select",
-            help="Optional: Filter stores by subcategory"
-        )
-        st.session_state.subcategory = subcategory
-
-    with col4:
-        # State selection - compute state options based on current subcategory filter
-        filtered_df = filter_stores(stores_df, subcategory)
-        state_clusters = filtered_df.groupby("state").agg(
+        # State filter - compute state options
+        filtered_for_states = filter_stores(stores_df, main_category, subcategory, detailed_category)
+        state_clusters = filtered_for_states.groupby("state").agg(
             count=("store_id", "count"),
         ).reset_index()
         state_clusters = state_clusters.sort_values("count", ascending=False)
@@ -417,66 +443,39 @@ def render_selection_screen(stores_df, brands, subcategories):
             for _, row in state_clusters.iterrows()
         ]
 
+        # Find current index
+        current_state = st.session_state.get("selected_state", "All States")
+        try:
+            state_index = next(i for i, opt in enumerate(state_options) if opt.startswith(current_state.split(" (")[0]))
+        except StopIteration:
+            state_index = 0
+
         selected_state = st.selectbox(
-            "Select State (optional)",
+            "State",
             options=state_options,
-            index=0,
+            index=state_index,
             key="state_selector",
-            help="Optional: Focus on a specific state"
+            help="Focus on a specific state (required for Census overlay)"
         )
-        st.session_state.selected_state = selected_state
 
-    # Validation
-    focus_brand_set = bool(st.session_state.focus_brand)
-    competitors_set = len(st.session_state.competitor_brands) >= 1
-    is_valid = focus_brand_set and competitors_set
-
-    if not focus_brand_set:
-        st.warning("Please select a focus brand")
-    elif not competitors_set:
-        st.warning("Please select at least one competitor brand")
-
-    st.divider()
-
-    analyze_clicked = st.button(
-        "Analyze",
-        disabled=not is_valid,
-        type="primary",
-        use_container_width=True
-    )
-
-    if analyze_clicked and is_valid:
-        # Set selected state for filtering
+        # Parse state code and detect changes
         if selected_state != "All States":
-            state_code = selected_state.split(" (")[0]
-            st.session_state.selected_state_code = state_code
+            new_state_code = selected_state.split(" (")[0]
         else:
-            st.session_state.selected_state_code = None
+            new_state_code = None
 
-        st.session_state.analysis_phase = "map"
-        st.rerun()
+        # Reset show_map and viewport bounds if state changed
+        old_state_code = st.session_state.get("selected_state_code")
+        if new_state_code != old_state_code:
+            st.session_state.show_map = False
+            st.session_state.viewport_bounds = None
 
-
-def render_map_view(stores_df, census_gdf):
-    """Render the map visualization with individual stores."""
-
-    # Sidebar controls
-    with st.sidebar:
-        st.header("Analysis Controls")
-
-        st.markdown(f"""
-**Focus Brand:** {st.session_state.focus_brand}
-
-**Competitors:** {", ".join(st.session_state.competitor_brands)}
-
-**Subcategory:** {st.session_state.subcategory}
-
-**State:** {st.session_state.get("selected_state", "All States")}
-        """)
+        st.session_state.selected_state = selected_state
+        st.session_state.selected_state_code = new_state_code
 
         st.divider()
 
-        # Census overlay selectbox - use session state to avoid triggering map resets
+        # Census overlay selectbox
         census_available = census_gdf is not None
         if census_available:
             census_overlay_option = st.selectbox(
@@ -486,7 +485,6 @@ def render_map_view(stores_df, census_gdf):
                 key="census_overlay_select",
                 help="Overlay Census tract data on the map"
             )
-            # Update session state (does not trigger rerun)
             st.session_state.census_overlay_option = census_overlay_option
             census_overlay_column = CENSUS_OVERLAYS[census_overlay_option]
         else:
@@ -495,140 +493,211 @@ def render_map_view(stores_df, census_gdf):
 
         st.divider()
 
-        if st.button("Restart Analysis", type="secondary", use_container_width=True):
-            st.session_state.analysis_phase = "selection"
-            st.session_state.selected_state_code = None
-            st.session_state.map_center = None
-            st.session_state.map_zoom = None
-            st.session_state.map_bounds = None
-            st.session_state.census_overlay_option = "None"
+        # Reset button to go back to initial state
+        if st.button("Reset Filters", use_container_width=True):
+            st.session_state.reset_requested = True
             st.rerun()
 
 
-    # Filter stores by subcategory
-    filtered_df = filter_stores(stores_df, st.session_state.subcategory)
+    # Filter stores by category hierarchy
+    filtered_df = filter_stores(
+        stores_df,
+        st.session_state.main_category,
+        st.session_state.subcategory,
+        st.session_state.detailed_category
+    )
 
     # Filter by state if selected
     selected_state_code = st.session_state.get("selected_state_code")
     if selected_state_code:
         filtered_df = filtered_df[filtered_df["state"] == selected_state_code]
 
-    # Filter census data by state if available and a state is selected
-    state_census_gdf = None
-    if census_gdf is not None and census_overlay_column is not None:
-        if selected_state_code:
-            state_census_gdf = census_gdf[census_gdf["state_abbrev"] == selected_state_code]
-        else:
-            # If no state filter, don't show census overlay (too much data)
-            st.sidebar.warning("Select a state to enable Census overlay")
-            census_overlay_column = None
-
-    # Add color column based on brand categorization
-    view_df = add_color_column(
-        filtered_df,
-        st.session_state.focus_brand,
-        st.session_state.competitor_brands
-    )
-
     # Main content
-    st.title("Store Distribution Map")
+    st.title("Coors Edge Distribution Analysis")
+
+    # Dynamic summary title based on state selection
+    if selected_state_code:
+        summary_title = f"{selected_state_code} Summary"
+    else:
+        summary_title = "National Summary"
+
+    # Title row with action buttons
+    title_col, btn_col1, btn_col2 = st.columns([3, 1, 1])
+    with title_col:
+        st.subheader(summary_title)
+    with btn_col1:
+        # Map it button - disabled if no state selected
+        map_disabled = selected_state_code is None
+        if st.button(
+            "Map it",
+            disabled=map_disabled,
+            use_container_width=True,
+            help="Select a state to enable mapping" if map_disabled else "View store distribution on map"
+        ):
+            st.session_state.show_map = True
+            st.rerun()
+    with btn_col2:
+        # Placeholder Drill Down button - always disabled for now
+        st.button(
+            "Drill Down",
+            disabled=True,
+            use_container_width=True,
+            help="Coming soon: Drill down into detailed analysis"
+        )
+
+    # Show summary stats
+    stats = get_category_stats(filtered_df)
+    total = stats['total']
+
+    if not selected_state_code:
+        st.caption(f"The full dataset contains {total:,} stores across all states.")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown("🟣 **Both Brands**")
+        st.markdown(f"### {stats['both']:,}")
+        st.caption(f"{stats['both']/total*100:.1f}% of stores" if total > 0 else "0% of stores")
+    with col2:
+        st.markdown(f"🟢 **{FOCUS_BRAND} Only**")
+        st.markdown(f"### {stats['coors_edge_only']:,}")
+        st.caption(f"{stats['coors_edge_only']/total*100:.1f}% of stores" if total > 0 else "0% of stores")
+    with col3:
+        st.markdown(f"🔴 **{COMPETITOR_BRAND} Only**")
+        st.markdown(f"### {stats['athletic_only']:,}")
+        st.caption(f"{stats['athletic_only']/total*100:.1f}% of stores" if total > 0 else "0% of stores")
+    with col4:
+        st.markdown("⚪ **Whitespace**")
+        st.markdown(f"### {stats['neither']:,}")
+        st.caption(f"{stats['neither']/total*100:.1f}% of stores" if total > 0 else "0% of stores")
+
+    # Only show map if user clicked "Map it" and a state is selected
+    if not st.session_state.get("show_map", False) or not selected_state_code:
+        return
+
+    st.divider()
+
+    # Filter census data by state if available
+    state_census_gdf = None
+    census_overlay_column = CENSUS_OVERLAYS.get(st.session_state.census_overlay_option)
+    if census_gdf is not None and census_overlay_column is not None:
+        state_census_gdf = census_gdf[census_gdf["state_abbrev"] == selected_state_code]
+
+    # Add color column based on pre-computed store_category
+    view_df = add_color_column(filtered_df)
 
     st.caption("Hover over stores to see details.")
 
     # Use all census tracts for the selected state
     filtered_census_gdf = state_census_gdf
 
-    # Get saved center/zoom from session state (preserves view across reruns)
-    saved_center = st.session_state.get("map_center")
-    saved_zoom = st.session_state.get("map_zoom")
-
-    # Create the map with preserved center/zoom if available
+    # Create the map - fits to state bounds on load
     m = create_folium_map(
         view_df,
         filtered_census_gdf,
         census_overlay_column,
-        center=saved_center,
-        zoom=saved_zoom
     )
 
     # Side-by-side layout: map on left (65%), stats on right (35%)
     map_col, stats_col = st.columns([65, 35])
 
     with map_col:
-        # Display map and capture center/zoom/bounds
+        # Return bounds so we can filter stats when user clicks refresh
         map_data = st_folium(
             m,
             use_container_width=True,
             height=600,
-            returned_objects=["center", "zoom", "bounds"],
+            returned_objects=["bounds"],
             key="store_map",
         )
 
-    # Save current center/zoom to session state for next rerun
-    if map_data and map_data.get("center"):
-        st.session_state.map_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
-    if map_data and map_data.get("zoom"):
-        st.session_state.map_zoom = map_data["zoom"]
-
-    # Get current bounds for filtering
+    # Get current bounds from the map
     current_bounds = map_data.get("bounds") if map_data else None
 
-    # Store bounds in session state for stats calculation
-    if current_bounds:
-        st.session_state.map_bounds = current_bounds
+    # Initialize viewport bounds in session state if not present
+    if "viewport_bounds" not in st.session_state:
+        st.session_state.viewport_bounds = None
 
-    # Use stored bounds to filter stores for stats
-    stored_bounds = st.session_state.get("map_bounds")
-    if stored_bounds:
-        viewport_df = filter_by_bounds(view_df, stored_bounds)
+    # Filter stores by viewport bounds if we have saved bounds
+    if st.session_state.viewport_bounds:
+        viewport_df = filter_by_bounds(view_df, st.session_state.viewport_bounds)
     else:
         viewport_df = view_df
 
-    # Calculate stats for stores in current viewport
-    results = categorize_stores(
-        viewport_df,
-        st.session_state.focus_brand,
-        st.session_state.competitor_brands
-    )
+    # Calculate stats for all stores in the state
+    stats = get_category_stats(viewport_df)
 
     with stats_col:
+        # Refresh button to update stats based on current viewport
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            if st.button("🔄 Refresh", use_container_width=True, help="Update stats for current map view"):
+                if current_bounds:
+                    st.session_state.viewport_bounds = current_bounds
+                    st.rerun()
+        with btn_col2:
+            # Only show reset button if viewport is filtered
+            is_filtered = st.session_state.get("viewport_bounds") is not None
+            if st.button("📍 All State", use_container_width=True, disabled=not is_filtered, help="Show stats for all stores in state"):
+                st.session_state.viewport_bounds = None
+                st.rerun()
+
+        # Determine if we're showing viewport or full state data
+        is_viewport_filtered = st.session_state.viewport_bounds is not None
+
         tab_summary, tab_census = st.tabs(["Summary", "Census Breakdown"])
 
         with tab_summary:
-            st.subheader("Stores in View")
+            if is_viewport_filtered:
+                st.subheader(f"Stores in View")
+            else:
+                st.subheader(f"Stores in {selected_state_code}")
 
             # Calculate percentages for display
-            total = results['total']
+            total = stats['total']
             if total > 0:
-                focus_pct = results['with_focus'] / total * 100
-                comp_pct = results['competitor_only'] / total * 100
-                white_pct = results['neither'] / total * 100
+                both_pct = stats['both'] / total * 100
+                coors_pct = stats['coors_edge_only'] / total * 100
+                athletic_pct = stats['athletic_only'] / total * 100
+                white_pct = stats['neither'] / total * 100
             else:
-                focus_pct = comp_pct = white_pct = 0
+                both_pct = coors_pct = athletic_pct = white_pct = 0
 
             # Clean card-style layout
             st.markdown(f"### {total:,}")
-            st.caption("Total stores in view")
+            if is_viewport_filtered:
+                st.caption(f"Stores in current map view")
+            else:
+                st.caption(f"Total stores in {selected_state_code}")
 
             st.markdown("---")
 
-            # Focus brand row
+            # Both brands row
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.markdown("🟢 **With Focus Brand**")
+                st.markdown("🟣 **Both Brands**")
             with col2:
-                st.markdown(f"**{results['with_focus']:,}**")
-            st.caption(f"{focus_pct:.1f}% of stores in view")
+                st.markdown(f"**{stats['both']:,}**")
+            st.caption(f"{both_pct:.1f}% of stores")
 
             st.markdown("")
 
-            # Competitor row
+            # Coors Edge only row
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.markdown("🔴 **Competitor Only**")
+                st.markdown(f"🟢 **{FOCUS_BRAND} Only**")
             with col2:
-                st.markdown(f"**{results['competitor_only']:,}**")
-            st.caption(f"{comp_pct:.1f}% of stores in view")
+                st.markdown(f"**{stats['coors_edge_only']:,}**")
+            st.caption(f"{coors_pct:.1f}% of stores")
+
+            st.markdown("")
+
+            # Athletic only row
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.markdown(f"🔴 **{COMPETITOR_BRAND} Only**")
+            with col2:
+                st.markdown(f"**{stats['athletic_only']:,}**")
+            st.caption(f"{athletic_pct:.1f}% of stores")
 
             st.markdown("")
 
@@ -637,8 +706,8 @@ def render_map_view(stores_df, census_gdf):
             with col1:
                 st.markdown("⚪ **Whitespace**")
             with col2:
-                st.markdown(f"**{results['neither']:,}**")
-            st.caption(f"{white_pct:.1f}% of stores in view")
+                st.markdown(f"**{stats['neither']:,}**")
+            st.caption(f"{white_pct:.1f}% of stores")
 
         with tab_census:
             # Get current census overlay selection
@@ -660,18 +729,24 @@ def render_map_view(stores_df, census_gdf):
                     st.warning("Run `python preprocess.py` to enable census analytics.")
                 else:
                     st.subheader(title)
+
+                    # Show breakdown for stores in viewport (or full state if no viewport filter)
+                    census_df = viewport_df
+                    if is_viewport_filtered:
+                        bounds_info = f"{len(census_df):,} stores in current view"
+                    else:
+                        bounds_info = f"All {len(census_df):,} stores in {selected_state_code}"
+
                     bracket_stats = categorize_stores_by_bracket(
-                        viewport_df,
-                        st.session_state.focus_brand,
-                        st.session_state.competitor_brands,
+                        census_df,
                         bracket_col=bracket_col
                     )
 
                     if len(bracket_stats) > 0:
                         display_df = bracket_stats[[
-                            "bracket", "total", "focus_pct", "competitor_pct", "whitespace_pct"
+                            "bracket", "total", "coors_pct", "both_pct", "athletic_pct", "whitespace_pct"
                         ]].copy()
-                        display_df.columns = ["Bracket", "Stores", "Focus %", "Competitor %", "Whitespace %"]
+                        display_df.columns = ["Bracket", "Stores", "Coors Edge %", "Both %", "Athletic %", "Whitespace %"]
 
                         st.dataframe(
                             display_df,
@@ -680,11 +755,14 @@ def render_map_view(stores_df, census_gdf):
                             column_config={
                                 "Bracket": st.column_config.TextColumn("Bracket"),
                                 "Stores": st.column_config.NumberColumn("Stores", format="%d"),
-                                "Focus %": st.column_config.NumberColumn("Focus %", format="%.1f%%"),
-                                "Competitor %": st.column_config.NumberColumn("Competitor %", format="%.1f%%"),
+                                "Coors Edge %": st.column_config.NumberColumn("Coors Edge %", format="%.1f%%"),
+                                "Both %": st.column_config.NumberColumn("Both %", format="%.1f%%"),
+                                "Athletic %": st.column_config.NumberColumn("Athletic %", format="%.1f%%"),
                                 "Whitespace %": st.column_config.NumberColumn("Whitespace %", format="%.1f%%"),
                             }
                         )
+
+                        st.caption(bounds_info)
 
                         # Note about unknown data
                         unknown = bracket_stats[bracket_stats["bracket"] == "Unknown"]
@@ -692,41 +770,32 @@ def render_map_view(stores_df, census_gdf):
                             unk_count = unknown["total"].iloc[0]
                             st.caption(f"*{unk_count:,} stores lack census data*")
                     else:
-                        st.info("No stores in current view.")
+                        st.info("No stores in current view. Try zooming out or click Refresh.")
 
 
 def main():
     # Load data
-    stores_df, brands, subcategories = load_data()
+    stores_df, main_categories, main_to_sub, sub_to_detailed = load_data()
     census_gdf = load_census_data()
 
     # Initialize session state
-    if "focus_brand" not in st.session_state:
-        st.session_state.focus_brand = None
-    if "competitor_brands" not in st.session_state:
-        st.session_state.competitor_brands = []
+    if "main_category" not in st.session_state:
+        st.session_state.main_category = "All"
     if "subcategory" not in st.session_state:
         st.session_state.subcategory = "All"
-    if "analysis_phase" not in st.session_state:
-        st.session_state.analysis_phase = "selection"
+    if "detailed_category" not in st.session_state:
+        st.session_state.detailed_category = "All"
     if "selected_state" not in st.session_state:
         st.session_state.selected_state = "All States"
     if "selected_state_code" not in st.session_state:
         st.session_state.selected_state_code = None
     if "census_overlay_option" not in st.session_state:
         st.session_state.census_overlay_option = "None"
-    if "map_center" not in st.session_state:
-        st.session_state.map_center = None
-    if "map_zoom" not in st.session_state:
-        st.session_state.map_zoom = None
-    if "map_bounds" not in st.session_state:
-        st.session_state.map_bounds = None
+    if "show_map" not in st.session_state:
+        st.session_state.show_map = False
 
-    # Route to appropriate view
-    if st.session_state.analysis_phase == "selection":
-        render_selection_screen(stores_df, brands, subcategories)
-    else:
-        render_map_view(stores_df, census_gdf)
+    # Render map view directly (no selection phase needed)
+    render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, census_gdf)
 
 
 if __name__ == "__main__":

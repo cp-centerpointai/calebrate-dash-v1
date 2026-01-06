@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Data preprocessing script for store distribution analysis dashboard.
-Transforms raw CSV data into optimized parquet format and generates lookup tables.
+Data preprocessing script for Coors Edge distribution analysis dashboard.
+Transforms raw CSV data into optimized parquet format with store categorization.
+
+This dashboard analyzes Coors Edge distribution vs Athletic Brewing competition
+within the Coors distribution network.
 
 Run this script once when data changes:
     python preprocess.py
@@ -11,6 +14,14 @@ import pandas as pd
 import numpy as np
 import json
 from pathlib import Path
+
+# Fixed brand configuration for this dashboard
+FOCUS_BRAND = "Coors Edge"
+COMPETITOR_BRAND = "Athletic Brewing"
+# Brand name as it appears in the data
+COMPETITOR_BRAND_DATA_NAME = "Athletic Brew"
+# Brands to exclude from the dataset
+EXCLUDE_BRANDS = ["High Noon"]
 
 
 def parse_comma_delimited(value: str) -> list[str]:
@@ -91,13 +102,46 @@ def main():
     print("Parsing all_products column...")
     df["all_products"] = df["all_products"].apply(parse_comma_delimited)
 
-    # Add brand count column
+    # Remove excluded brands (High Noon) from brand lists
+    print(f"Removing excluded brands: {EXCLUDE_BRANDS}...")
+    def filter_brands(brands_list):
+        return [b for b in brands_list if b not in EXCLUDE_BRANDS]
+    df["all_brands"] = df["all_brands"].apply(filter_brands)
+
+    # Add brand count column (after filtering)
     print("Adding brand_count column...")
     df["brand_count"] = df["all_brands"].apply(len)
 
-    # Add brands_display column for PyDeck tooltips (comma-joined string)
+    # Add brands_display column for tooltips (comma-joined string)
     print("Adding brands_display column...")
     df["brands_display"] = df["all_brands"].apply(lambda x: ", ".join(x) if x else "None")
+
+    # Add store categorization flags for Coors Edge vs Athletic Brewing analysis
+    print("Adding store categorization flags...")
+    df["has_coors_edge"] = df["all_brands"].apply(lambda x: FOCUS_BRAND in x)
+    df["has_athletic"] = df["all_brands"].apply(lambda x: COMPETITOR_BRAND_DATA_NAME in x)
+
+    # Create store category for easy filtering/coloring
+    # Categories: "coors_edge_only", "athletic_only", "both", "neither"
+    def categorize_store(row):
+        has_focus = row["has_coors_edge"]
+        has_competitor = row["has_athletic"]
+        if has_focus and has_competitor:
+            return "both"
+        elif has_focus:
+            return "coors_edge_only"
+        elif has_competitor:
+            return "athletic_only"
+        else:
+            return "neither"
+
+    df["store_category"] = df.apply(categorize_store, axis=1)
+
+    # Print category distribution
+    category_counts = df["store_category"].value_counts()
+    print(f"Store categories:")
+    for cat, count in category_counts.items():
+        print(f"  {cat}: {count:,} ({count/len(df)*100:.1f}%)")
 
     # Handle nulls in category fields
     print("Handling null category values...")
@@ -162,20 +206,46 @@ def main():
     drop_cols = ["source_file", "state_fips", "county_fips", "block_geoid", "block_group", "block", "Unnamed: 0"]
     df = df.drop(columns=[c for c in drop_cols if c in df.columns])
 
-    # Create brand lookup table: distinct brands sorted alphabetically
-    print("Creating brand lookup table...")
-    all_brands_set = set()
-    for brands_list in df["all_brands"]:
-        all_brands_set.update(brands_list)
-    brands_sorted = sorted(all_brands_set, key=str.lower)
-    print(f"Found {len(brands_sorted)} distinct brands")
+    # Create category hierarchy lookup tables
+    print("Creating category hierarchy lookup tables...")
 
-    # Create subcategory lookup table: distinct subcategories sorted alphabetically
-    print("Creating subcategory lookup table...")
+    # Main categories sorted alphabetically (with "All" at start, "Uncategorized" at end if present)
+    main_categories = df["main_category"].unique().tolist()
+    main_categories = [c for c in main_categories if c != "Uncategorized"]
+    main_categories_sorted = sorted(main_categories, key=str.lower)
+    if "Uncategorized" in df["main_category"].values:
+        main_categories_sorted.append("Uncategorized")
+    main_categories_with_all = ["All"] + main_categories_sorted
+    print(f"Found {len(main_categories_sorted)} distinct main categories")
+
+    # Map: main_category -> list of subcategories
+    main_to_sub = df.groupby("main_category")["subcategory"].unique().apply(list).to_dict()
+    # Sort each list alphabetically, move "Uncategorized" to end
+    for key in main_to_sub:
+        subs = main_to_sub[key]
+        subs = [s for s in subs if s != "Uncategorized"]
+        subs = sorted(subs, key=str.lower)
+        if "Uncategorized" in df[df["main_category"] == key]["subcategory"].values:
+            subs.append("Uncategorized")
+        main_to_sub[key] = ["All"] + subs
+    print(f"Created main_category -> subcategory mapping")
+
+    # Map: subcategory -> list of detailed_categories
+    sub_to_detailed = df.groupby("subcategory")["detailed_category"].unique().apply(list).to_dict()
+    # Sort each list alphabetically, move "Uncategorized" to end
+    for key in sub_to_detailed:
+        details = sub_to_detailed[key]
+        details = [d for d in details if d != "Uncategorized"]
+        details = sorted(details, key=str.lower)
+        if "Uncategorized" in df[df["subcategory"] == key]["detailed_category"].values:
+            details.append("Uncategorized")
+        sub_to_detailed[key] = ["All"] + details
+    print(f"Created subcategory -> detailed_category mapping")
+
+    # Legacy: subcategory lookup (for backward compatibility)
     subcategories = df["subcategory"].unique().tolist()
     subcategories = [s for s in subcategories if s != "Uncategorized"]
     subcategories_sorted = sorted(subcategories, key=str.lower)
-    # Add "All" as first option, then "Uncategorized" if it exists
     if "Uncategorized" in df["subcategory"].values:
         subcategories_sorted.append("Uncategorized")
     subcategories_with_all = ["All"] + subcategories_sorted
@@ -189,13 +259,25 @@ def main():
     df.to_parquet(parquet_path, engine="pyarrow", index=False)
     print(f"  Saved: {parquet_path}")
 
-    # Save brands JSON
-    brands_path = output_dir / "brands.json"
-    with open(brands_path, "w") as f:
-        json.dump(brands_sorted, f, indent=2)
-    print(f"  Saved: {brands_path}")
+    # Save main_categories JSON
+    main_categories_path = output_dir / "main_categories.json"
+    with open(main_categories_path, "w") as f:
+        json.dump(main_categories_with_all, f, indent=2)
+    print(f"  Saved: {main_categories_path}")
 
-    # Save subcategories JSON
+    # Save main_to_subcategories mapping JSON
+    main_to_sub_path = output_dir / "main_to_subcategories.json"
+    with open(main_to_sub_path, "w") as f:
+        json.dump(main_to_sub, f, indent=2)
+    print(f"  Saved: {main_to_sub_path}")
+
+    # Save subcategory_to_detailed mapping JSON
+    sub_to_detailed_path = output_dir / "subcategory_to_detailed.json"
+    with open(sub_to_detailed_path, "w") as f:
+        json.dump(sub_to_detailed, f, indent=2)
+    print(f"  Saved: {sub_to_detailed_path}")
+
+    # Save subcategories JSON (legacy, for backward compatibility)
     subcategories_path = output_dir / "subcategories.json"
     with open(subcategories_path, "w") as f:
         json.dump(subcategories_with_all, f, indent=2)
@@ -203,7 +285,9 @@ def main():
 
     print("\nPreprocessing complete!")
     print(f"  Total stores: {len(df):,}")
-    print(f"  Distinct brands: {len(brands_sorted)}")
+    print(f"  Focus brand: {FOCUS_BRAND}")
+    print(f"  Competitor brand: {COMPETITOR_BRAND} (data name: {COMPETITOR_BRAND_DATA_NAME})")
+    print(f"  Excluded brands: {EXCLUDE_BRANDS}")
     print(f"  Distinct subcategories: {len(subcategories_sorted)}")
 
 
