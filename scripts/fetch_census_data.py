@@ -110,8 +110,10 @@ def fetch_acs_data_for_state(state_fips: str) -> pd.DataFrame:
 
     Variables:
     - B19013_001E: Median Household Income
-    - B01001_*: Age cohorts for population 21-34
+    - B01001_*: Age cohorts for population 21-34 and 25-44
+    - B01002_001E: Median Age
     - B15003_*: Educational attainment for bachelor's degree or higher
+    - B11001_*: Household type (total, family, non-family)
     """
 
     # Age variables for 21-34 (male and female)
@@ -119,11 +121,18 @@ def fetch_acs_data_for_state(state_fips: str) -> pd.DataFrame:
     # B01001_034E: Female 22-24, B01001_035E: Female 25-29, B01001_036E: Female 30-34
     # Note: 21 is included in 20-21 cohort which we'll use as approximation
     # B01001_009E: Male 20-21, B01001_033E: Female 20-21
+    # Additional for 25-44: B01001_013E: Male 35-39, B01001_014E: Male 40-44
+    # B01001_037E: Female 35-39, B01001_038E: Female 40-44
     age_vars = [
         "B01001_009E", "B01001_010E", "B01001_011E", "B01001_012E",  # Male 20-34
+        "B01001_013E", "B01001_014E",  # Male 35-44
         "B01001_033E", "B01001_034E", "B01001_035E", "B01001_036E",  # Female 20-34
+        "B01001_037E", "B01001_038E",  # Female 35-44
         "B01001_001E"  # Total population
     ]
+
+    # Median age
+    median_age_vars = ["B01002_001E"]
 
     # Education variables - Bachelor's degree or higher (ages 25+)
     # B15003_022E: Bachelor's, B15003_023E: Master's, B15003_024E: Professional, B15003_025E: Doctorate
@@ -133,10 +142,19 @@ def fetch_acs_data_for_state(state_fips: str) -> pd.DataFrame:
         "B15003_022E", "B15003_023E", "B15003_024E", "B15003_025E"  # Bachelor's+
     ]
 
+    # Household type variables
+    # B11001_001E: Total households
+    # B11001_002E: Family households
+    # B11001_007E: Non-family households
+    household_vars = [
+        "B11001_001E",  # Total households
+        "B11001_007E",  # Non-family households
+    ]
+
     # Income variable
     income_vars = ["B19013_001E"]
 
-    all_vars = income_vars + age_vars + edu_vars
+    all_vars = income_vars + age_vars + median_age_vars + edu_vars + household_vars
     vars_str = ",".join(all_vars)
 
     # ACS 5-year 2022 estimates
@@ -178,6 +196,17 @@ def fetch_acs_data_for_state(state_fips: str) -> pd.DataFrame:
     df["total_pop"] = df["B01001_001E"]
     df["pct_pop_21_34"] = (df["pop_21_34"] / df["total_pop"] * 100).round(1)
 
+    # Population ages 25-44 (prime adult demographic for NA beer)
+    df["pop_25_44"] = (
+        df["B01001_011E"] + df["B01001_012E"] + df["B01001_013E"] + df["B01001_014E"] +  # Male 25-44
+        df["B01001_035E"] + df["B01001_036E"] + df["B01001_037E"] + df["B01001_038E"]   # Female 25-44
+    )
+    df["pct_pop_25_44"] = (df["pop_25_44"] / df["total_pop"] * 100).round(1)
+
+    # Median age (negative values are Census codes for missing data)
+    df["median_age"] = pd.to_numeric(df["B01002_001E"], errors="coerce")
+    df.loc[df["median_age"] < 0, "median_age"] = pd.NA
+
     # % Bachelor's degree or higher
     df["pop_bachelors_plus"] = (
         df["B15003_022E"] + df["B15003_023E"] + df["B15003_024E"] + df["B15003_025E"]
@@ -185,12 +214,20 @@ def fetch_acs_data_for_state(state_fips: str) -> pd.DataFrame:
     df["pop_25_plus"] = df["B15003_001E"]
     df["pct_college_educated"] = (df["pop_bachelors_plus"] / df["pop_25_plus"] * 100).round(1)
 
+    # % Non-family households (singles, roommates, etc.)
+    df["total_households"] = df["B11001_001E"]
+    df["nonfamily_households"] = df["B11001_007E"]
+    df["pct_nonfamily_hh"] = (df["nonfamily_households"] / df["total_households"] * 100).round(1)
+
     # Median household income (negative values are Census codes for missing data)
     df["median_hh_income"] = df["B19013_001E"]
     df.loc[df["median_hh_income"] < 0, "median_hh_income"] = pd.NA
 
     # Select only needed columns
-    result = df[["GEOID", "median_hh_income", "pct_pop_21_34", "pct_college_educated"]].copy()
+    result = df[[
+        "GEOID", "median_hh_income", "pct_pop_21_34", "pct_pop_25_44",
+        "median_age", "pct_college_educated", "pct_nonfamily_hh", "total_pop"
+    ]].copy()
 
     return result
 
@@ -236,10 +273,21 @@ def main():
     acs_matched = merged["median_hh_income"].notna().sum()
     print(f"  Matched {acs_matched:,} of {len(merged):,} tracts with ACS data")
 
+    # Calculate population density (people per square mile)
+    print("Calculating population density...")
+    # Convert geometry to equal-area projection for accurate area calculation
+    merged_projected = merged.to_crs("ESRI:102003")  # USA Contiguous Albers Equal Area
+    merged["area_sq_miles"] = merged_projected.geometry.area / 2589988.11  # sq meters to sq miles
+    merged["pop_density"] = (merged["total_pop"] / merged["area_sq_miles"]).round(0)
+    # Handle infinite/very large values from tiny tracts
+    merged.loc[merged["pop_density"] > 500000, "pop_density"] = pd.NA
+
     # Keep only necessary columns
     columns_to_keep = [
         "GEOID", "state_fips", "state_name", "state_abbrev",
-        "median_hh_income", "pct_pop_21_34", "pct_college_educated",
+        "median_hh_income", "pct_pop_21_34", "pct_pop_25_44",
+        "median_age", "pct_college_educated", "pct_nonfamily_hh",
+        "total_pop", "pop_density",
         "geometry"
     ]
     merged = merged[columns_to_keep]
@@ -267,10 +315,27 @@ def main():
     print(f"    Min: {merged['pct_pop_21_34'].min():.1f}%")
     print(f"    Max: {merged['pct_pop_21_34'].max():.1f}%")
     print(f"    Mean: {merged['pct_pop_21_34'].mean():.1f}%")
+    print(f"\n  % Population 25-44:")
+    print(f"    Min: {merged['pct_pop_25_44'].min():.1f}%")
+    print(f"    Max: {merged['pct_pop_25_44'].max():.1f}%")
+    print(f"    Mean: {merged['pct_pop_25_44'].mean():.1f}%")
+    print(f"\n  Median Age:")
+    print(f"    Min: {merged['median_age'].min():.1f}")
+    print(f"    Max: {merged['median_age'].max():.1f}")
+    print(f"    Mean: {merged['median_age'].mean():.1f}")
     print(f"\n  % College Educated:")
     print(f"    Min: {merged['pct_college_educated'].min():.1f}%")
     print(f"    Max: {merged['pct_college_educated'].max():.1f}%")
     print(f"    Mean: {merged['pct_college_educated'].mean():.1f}%")
+    print(f"\n  % Non-Family Households:")
+    print(f"    Min: {merged['pct_nonfamily_hh'].min():.1f}%")
+    print(f"    Max: {merged['pct_nonfamily_hh'].max():.1f}%")
+    print(f"    Mean: {merged['pct_nonfamily_hh'].mean():.1f}%")
+    print(f"\n  Population Density (per sq mile):")
+    print(f"    Min: {merged['pop_density'].min():,.0f}")
+    print(f"    Max: {merged['pop_density'].max():,.0f}")
+    print(f"    Mean: {merged['pop_density'].mean():,.0f}")
+    print(f"    Median: {merged['pop_density'].median():,.0f}")
 
 
 if __name__ == "__main__":

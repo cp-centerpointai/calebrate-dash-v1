@@ -30,6 +30,14 @@ CATEGORY_COLORS = {
     "neither": "#95a5a6",         # Gray - whitespace
 }
 
+# Store category display names (matching legend)
+CATEGORY_DISPLAY_NAMES = {
+    "both": "Both Brands",
+    "coors_edge_only": "Coors Edge Only",
+    "athletic_only": "Athletic Only",
+    "neither": "No NA Beer",
+}
+
 # Page configuration
 st.set_page_config(
     page_title="Coors Edge Distribution Analysis",
@@ -76,7 +84,11 @@ CENSUS_OVERLAYS = {
     "None": None,
     "Median Household Income": "median_hh_income",
     "% Population 21-34": "pct_pop_21_34",
-    "% College Educated": "pct_college_educated"
+    "% Population 25-44": "pct_pop_25_44",
+    "Median Age": "median_age",
+    "% College Educated": "pct_college_educated",
+    "% Non-Family Households": "pct_nonfamily_hh",
+    "Population Density": "pop_density"
 }
 
 
@@ -152,7 +164,7 @@ def categorize_stores_by_bracket(
     grouped["coors_pct"] = (grouped["with_coors_edge"] / grouped["total"] * 100).round(1)
     grouped["both_pct"] = (grouped["with_both"] / grouped["total"] * 100).round(1)
     grouped["athletic_pct"] = (grouped["athletic_only"] / grouped["total"] * 100).round(1)
-    grouped["whitespace_pct"] = (grouped["neither"] / grouped["total"] * 100).round(1)
+    grouped["no_na_beer_pct"] = (grouped["neither"] / grouped["total"] * 100).round(1)
 
     # Sort by quintile prefix (Q1, Q2, ..., then Unknown)
     def sort_key(label):
@@ -195,7 +207,25 @@ def add_census_choropleth(m: folium.Map, census_gdf: gpd.GeoDataFrame, overlay_c
             caption=caption
         )
         format_value = lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
-    else:  # pct_college_educated
+    elif overlay_column == "pct_pop_25_44":
+        caption = "% Population Ages 25-44"
+        colormap = cm.LinearColormap(
+            colors=["#feebe2", "#fbb4b9", "#f768a1", "#c51b8a", "#7a0177"],
+            vmin=vmin,
+            vmax=vmax,
+            caption=caption
+        )
+        format_value = lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+    elif overlay_column == "median_age":
+        caption = "Median Age"
+        colormap = cm.LinearColormap(
+            colors=["#f7fcf5", "#c7e9c0", "#74c476", "#31a354", "#006d2c"],
+            vmin=vmin,
+            vmax=vmax,
+            caption=caption
+        )
+        format_value = lambda x: f"{x:.1f}" if pd.notna(x) else "N/A"
+    elif overlay_column == "pct_college_educated":
         caption = "% College Educated (Bachelor's+)"
         colormap = cm.LinearColormap(
             colors=["#f7fcf5", "#c7e9c0", "#74c476", "#31a354", "#006d2c"],
@@ -204,6 +234,34 @@ def add_census_choropleth(m: folium.Map, census_gdf: gpd.GeoDataFrame, overlay_c
             caption=caption
         )
         format_value = lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+    elif overlay_column == "pct_nonfamily_hh":
+        caption = "% Non-Family Households"
+        colormap = cm.LinearColormap(
+            colors=["#fff7ec", "#fee8c8", "#fdd49e", "#fdbb84", "#fc8d59"],
+            vmin=vmin,
+            vmax=vmax,
+            caption=caption
+        )
+        format_value = lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+    elif overlay_column == "pop_density":
+        caption = "Population Density (per sq mi)"
+        colormap = cm.LinearColormap(
+            colors=["#edf8fb", "#b3cde3", "#8c96c6", "#8856a7", "#810f7c"],
+            vmin=vmin,
+            vmax=vmax,
+            caption=caption
+        )
+        format_value = lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A"
+    else:
+        # Fallback for any other column
+        caption = overlay_column
+        colormap = cm.LinearColormap(
+            colors=["#f7fcf5", "#c7e9c0", "#74c476", "#31a354", "#006d2c"],
+            vmin=vmin,
+            vmax=vmax,
+            caption=caption
+        )
+        format_value = lambda x: f"{x:.1f}" if pd.notna(x) else "N/A"
 
     # Create style function
     def style_function(feature):
@@ -313,12 +371,15 @@ def create_folium_map(
 
     # Add individual markers
     for _, row in stores_df.iterrows():
+        # Get lead score (integer 0-100)
+        lead_score = row.get('lead_score', 0) if pd.notna(row.get('lead_score')) else 0
+
         # Create tooltip content (shown on hover)
         tooltip_html = f"""
         <b>{row['name']}</b><br>
         {row['address']}, {row['city']}, {row['state']} {row['postal_code']}<br>
         <b>Category:</b> {row['subcategory']} &gt; {row['detailed_category']}<br>
-        <b>Brands:</b> {row['brands_display']}
+        <b>Lead Score:</b> {lead_score}
         """
 
         folium.CircleMarker(
@@ -342,6 +403,110 @@ def create_folium_map(
     return m
 
 
+def render_drilldown_table(df: pd.DataFrame, state_code: str = None):
+    """Render the drill-down table with store details."""
+    # Get viewport bounds for filtering if available
+    viewport_bounds = st.session_state.get("viewport_bounds")
+
+    # Filter by viewport if bounds are set
+    if viewport_bounds:
+        table_df = filter_by_bounds(df, viewport_bounds)
+        filter_label = "stores in current view"
+    else:
+        table_df = df
+        if state_code:
+            filter_label = f"stores in {state_code}"
+        else:
+            filter_label = "stores"
+
+    # Header with close button
+    header_col, close_col = st.columns([4, 1])
+    with header_col:
+        st.subheader(f"Store Details ({len(table_df):,} {filter_label})")
+    with close_col:
+        if st.button("✕ Close", key="close_drilldown", use_container_width=True):
+            st.session_state.show_drilldown = False
+            st.rerun()
+
+    if len(table_df) == 0:
+        st.info("No stores in the current view. Try adjusting filters or viewport.")
+        return
+
+    # Prepare display dataframe
+    display_df = table_df[[
+        "name",
+        "address",
+        "city",
+        "state",
+        "postal_code",
+        "main_category",
+        "subcategory",
+        "detailed_category",
+        "store_category",
+        "lead_score",
+    ]].copy()
+
+    # Map store_category to display names
+    display_df["store_type"] = display_df["store_category"].map(CATEGORY_DISPLAY_NAMES)
+
+    # Format address column
+    display_df["full_address"] = (
+        display_df["address"] + ", " +
+        display_df["city"] + ", " +
+        display_df["state"] + " " +
+        display_df["postal_code"].astype(str)
+    )
+
+    # Create final display dataframe with renamed columns
+    final_df = display_df[[
+        "name",
+        "full_address",
+        "main_category",
+        "subcategory",
+        "detailed_category",
+        "store_type",
+        "lead_score",
+    ]].copy()
+
+    final_df.columns = [
+        "Store Name",
+        "Address",
+        "Category",
+        "Subcategory",
+        "Detailed Category",
+        "Store Type",
+        "Lead Score",
+    ]
+
+    # Sort by lead score descending by default
+    final_df = final_df.sort_values("Lead Score", ascending=False)
+
+    # Display table with sorting enabled
+    st.dataframe(
+        final_df,
+        hide_index=True,
+        use_container_width=True,
+        height=400,
+        column_config={
+            "Store Name": st.column_config.TextColumn("Store Name", width="medium"),
+            "Address": st.column_config.TextColumn("Address", width="large"),
+            "Category": st.column_config.TextColumn("Category", width="small"),
+            "Subcategory": st.column_config.TextColumn("Subcategory", width="small"),
+            "Detailed Category": st.column_config.TextColumn("Detailed Category", width="small"),
+            "Store Type": st.column_config.TextColumn("Store Type", width="small"),
+            "Lead Score": st.column_config.NumberColumn(
+                "Lead Score",
+                format="%d",
+                width="small",
+                help="Score (0-100) indicating store potential for NA beer. Based on: store category, demographic profile (income, age, education), and competitor presence."
+            ),
+        }
+    )
+
+    # Store type filter hint
+    st.caption("Click column headers to sort. Use sidebar filters to narrow results.")
+
+
 def reset_filters():
     """Callback to reset all filters before widgets are instantiated."""
     # Reset category hierarchy
@@ -361,6 +526,7 @@ def reset_filters():
     st.session_state.census_overlay_select = "None"
     # Reset map state
     st.session_state.show_map = False
+    st.session_state.show_drilldown = False
     st.session_state.viewport_bounds = None
 
 
@@ -537,13 +703,14 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
             st.session_state.show_map = True
             st.rerun()
     with btn_col2:
-        # Placeholder Drill Down button - always disabled for now
-        st.button(
+        # Drill Down button - always enabled
+        if st.button(
             "Drill Down",
-            disabled=True,
             use_container_width=True,
-            help="Coming soon: Drill down into detailed analysis"
-        )
+            help="View detailed store list"
+        ):
+            st.session_state.show_drilldown = True
+            st.rerun()
 
     # Show summary stats
     stats = get_category_stats(filtered_df)
@@ -566,24 +733,36 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
         st.markdown(f"### {stats['athletic_only']:,}")
         st.caption(f"{stats['athletic_only']/total*100:.1f}% of stores" if total > 0 else "0% of stores")
     with col4:
-        st.markdown("⚪ **Whitespace**")
+        st.markdown("⚪ **No NA Beer**")
         st.markdown(f"### {stats['neither']:,}")
         st.caption(f"{stats['neither']/total*100:.1f}% of stores" if total > 0 else "0% of stores")
 
-    # Only show map if user clicked "Map it" and a state is selected
-    if not st.session_state.get("show_map", False) or not selected_state_code:
+    # Check if we should show drill-down or map
+    show_map = st.session_state.get("show_map", False) and selected_state_code
+    show_drilldown = st.session_state.get("show_drilldown", False)
+
+    # Early return if neither map nor drilldown should be shown
+    if not show_map and not show_drilldown:
         return
 
     st.divider()
+
+    # Prepare data for both views
+    view_df = add_color_column(filtered_df)
+
+    # Show drill-down table if enabled
+    if show_drilldown:
+        render_drilldown_table(view_df, selected_state_code)
+
+    # Only proceed with map if enabled
+    if not show_map:
+        return
 
     # Filter census data by state if available
     state_census_gdf = None
     census_overlay_column = CENSUS_OVERLAYS.get(st.session_state.census_overlay_option)
     if census_gdf is not None and census_overlay_column is not None:
         state_census_gdf = census_gdf[census_gdf["state_abbrev"] == selected_state_code]
-
-    # Add color column based on pre-computed store_category
-    view_df = add_color_column(filtered_df)
 
     st.caption("Hover over stores to see details.")
 
@@ -597,7 +776,7 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
         census_overlay_column,
     )
 
-    # Side-by-side layout: map on left (65%), stats on right (35%)
+    # Side-by-side layout: map on left, stats panel on right
     map_col, stats_col = st.columns([65, 35])
 
     with map_col:
@@ -627,100 +806,122 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
     stats = get_category_stats(viewport_df)
 
     with stats_col:
-        # Refresh button to update stats based on current viewport
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1:
-            if st.button("🔄 Refresh", use_container_width=True, help="Update stats for current map view"):
-                if current_bounds:
-                    st.session_state.viewport_bounds = current_bounds
-                    st.rerun()
-        with btn_col2:
-            # Only show reset button if viewport is filtered
-            is_filtered = st.session_state.get("viewport_bounds") is not None
-            if st.button("📍 All State", use_container_width=True, disabled=not is_filtered, help="Show stats for all stores in state"):
-                st.session_state.viewport_bounds = None
-                st.rerun()
-
         # Determine if we're showing viewport or full state data
         is_viewport_filtered = st.session_state.viewport_bounds is not None
 
-        tab_summary, tab_census = st.tabs(["Summary", "Census Breakdown"])
+        # Calculate percentages for display
+        total = stats['total']
+        if total > 0:
+            both_pct = stats['both'] / total * 100
+            coors_pct = stats['coors_edge_only'] / total * 100
+            athletic_pct = stats['athletic_only'] / total * 100
+            white_pct = stats['neither'] / total * 100
+        else:
+            both_pct = coors_pct = athletic_pct = white_pct = 0
+
+        # Compact header with total and refresh button
+        header_col, btn_col = st.columns([2, 1])
+        with header_col:
+            location_label = "View" if is_viewport_filtered else selected_state_code
+            st.markdown(f"**{total:,}** stores in {location_label}")
+        with btn_col:
+            if st.button("🔄 Refresh", help="Refresh stats for current view"):
+                if current_bounds:
+                    st.session_state.viewport_bounds = current_bounds
+                    st.rerun()
+
+        # Reset to full state link (only show if filtered)
+        if is_viewport_filtered:
+            if st.button("Show all stores in state", type="tertiary", use_container_width=True):
+                st.session_state.viewport_bounds = None
+                st.rerun()
+
+        # Tabs for Summary vs Census Breakdown
+        tab_summary, tab_census = st.tabs(["Summary", "Census"])
 
         with tab_summary:
-            if is_viewport_filtered:
-                st.subheader(f"Stores in View")
-            else:
-                st.subheader(f"Stores in {selected_state_code}")
-
-            # Calculate percentages for display
-            total = stats['total']
-            if total > 0:
-                both_pct = stats['both'] / total * 100
-                coors_pct = stats['coors_edge_only'] / total * 100
-                athletic_pct = stats['athletic_only'] / total * 100
-                white_pct = stats['neither'] / total * 100
-            else:
-                both_pct = coors_pct = athletic_pct = white_pct = 0
-
-            # Clean card-style layout
-            st.markdown(f"### {total:,}")
-            if is_viewport_filtered:
-                st.caption(f"Stores in current map view")
-            else:
-                st.caption(f"Total stores in {selected_state_code}")
-
-            st.markdown("---")
-
-            # Both brands row
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown("🟣 **Both Brands**")
-            with col2:
-                st.markdown(f"**{stats['both']:,}**")
-            st.caption(f"{both_pct:.1f}% of stores")
-
-            st.markdown("")
-
-            # Coors Edge only row
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown(f"🟢 **{FOCUS_BRAND} Only**")
-            with col2:
-                st.markdown(f"**{stats['coors_edge_only']:,}**")
-            st.caption(f"{coors_pct:.1f}% of stores")
-
-            st.markdown("")
-
-            # Athletic only row
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown(f"🔴 **{COMPETITOR_BRAND} Only**")
-            with col2:
-                st.markdown(f"**{stats['athletic_only']:,}**")
-            st.caption(f"{athletic_pct:.1f}% of stores")
-
-            st.markdown("")
-
-            # Whitespace row
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown("⚪ **Whitespace**")
-            with col2:
-                st.markdown(f"**{stats['neither']:,}**")
-            st.caption(f"{white_pct:.1f}% of stores")
+            # Compact legend-style stats using custom HTML
+            legend_html = f"""
+            <style>
+                .legend-container {{
+                    background: rgba(255,255,255,0.05);
+                    border-radius: 8px;
+                    padding: 12px;
+                    margin-top: 8px;
+                }}
+                .legend-row {{
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    padding: 6px 0;
+                    border-bottom: 1px solid rgba(255,255,255,0.1);
+                }}
+                .legend-row:last-child {{
+                    border-bottom: none;
+                }}
+                .legend-label {{
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }}
+                .legend-dot {{
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 50%;
+                    display: inline-block;
+                }}
+                .legend-value {{
+                    text-align: right;
+                    font-weight: 600;
+                }}
+                .legend-pct {{
+                    color: #888;
+                    font-size: 0.85em;
+                    margin-left: 4px;
+                }}
+            </style>
+            <div class="legend-container">
+                <div class="legend-row">
+                    <span class="legend-label">
+                        <span class="legend-dot" style="background: #9b59b6;"></span>
+                        Both Brands
+                    </span>
+                    <span class="legend-value">{stats['both']:,}<span class="legend-pct">({both_pct:.1f}%)</span></span>
+                </div>
+                <div class="legend-row">
+                    <span class="legend-label">
+                        <span class="legend-dot" style="background: #27ae60;"></span>
+                        Coors Edge Only
+                    </span>
+                    <span class="legend-value">{stats['coors_edge_only']:,}<span class="legend-pct">({coors_pct:.1f}%)</span></span>
+                </div>
+                <div class="legend-row">
+                    <span class="legend-label">
+                        <span class="legend-dot" style="background: #e74c3c;"></span>
+                        Athletic Only
+                    </span>
+                    <span class="legend-value">{stats['athletic_only']:,}<span class="legend-pct">({athletic_pct:.1f}%)</span></span>
+                </div>
+                <div class="legend-row">
+                    <span class="legend-label">
+                        <span class="legend-dot" style="background: #95a5a6;"></span>
+                        No NA Beer
+                    </span>
+                    <span class="legend-value">{stats['neither']:,}<span class="legend-pct">({white_pct:.1f}%)</span></span>
+                </div>
+            </div>
+            """
+            st.markdown(legend_html, unsafe_allow_html=True)
 
         with tab_census:
-            # Get current census overlay selection
             census_selection = st.session_state.get("census_overlay_option", "None")
-
             if census_selection == "None":
                 st.info("Select a Census Overlay from the sidebar to see demographic breakdown.")
             else:
-                # Map overlay selection to bracket column and display title
                 overlay_config = {
-                    "Median Household Income": ("income_bracket", "By Household Income"),
-                    "% Population 21-34": ("age_bracket", "By Young Adult Population (21-34)"),
-                    "% College Educated": ("education_bracket", "By College Education"),
+                    "Median Household Income": ("income_bracket", "By Income"),
+                    "% Population 21-34": ("age_bracket", "By Age (21-34)"),
+                    "% College Educated": ("education_bracket", "By Education"),
                 }
 
                 bracket_col, title = overlay_config.get(census_selection, (None, None))
@@ -728,49 +929,26 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
                 if bracket_col is None or bracket_col not in viewport_df.columns:
                     st.warning("Run `python preprocess.py` to enable census analytics.")
                 else:
-                    st.subheader(title)
-
-                    # Show breakdown for stores in viewport (or full state if no viewport filter)
-                    census_df = viewport_df
-                    if is_viewport_filtered:
-                        bounds_info = f"{len(census_df):,} stores in current view"
-                    else:
-                        bounds_info = f"All {len(census_df):,} stores in {selected_state_code}"
+                    st.markdown(f"**{title}**")
 
                     bracket_stats = categorize_stores_by_bracket(
-                        census_df,
+                        viewport_df,
                         bracket_col=bracket_col
                     )
 
                     if len(bracket_stats) > 0:
                         display_df = bracket_stats[[
-                            "bracket", "total", "coors_pct", "both_pct", "athletic_pct", "whitespace_pct"
+                            "bracket", "total", "coors_pct", "athletic_pct", "no_na_beer_pct"
                         ]].copy()
-                        display_df.columns = ["Bracket", "Stores", "Coors Edge %", "Both %", "Athletic %", "Whitespace %"]
+                        display_df.columns = ["Bracket", "Stores", "Coors %", "Athletic %", "No NA %"]
 
                         st.dataframe(
                             display_df,
                             hide_index=True,
                             use_container_width=True,
-                            column_config={
-                                "Bracket": st.column_config.TextColumn("Bracket"),
-                                "Stores": st.column_config.NumberColumn("Stores", format="%d"),
-                                "Coors Edge %": st.column_config.NumberColumn("Coors Edge %", format="%.1f%%"),
-                                "Both %": st.column_config.NumberColumn("Both %", format="%.1f%%"),
-                                "Athletic %": st.column_config.NumberColumn("Athletic %", format="%.1f%%"),
-                                "Whitespace %": st.column_config.NumberColumn("Whitespace %", format="%.1f%%"),
-                            }
                         )
-
-                        st.caption(bounds_info)
-
-                        # Note about unknown data
-                        unknown = bracket_stats[bracket_stats["bracket"] == "Unknown"]
-                        if len(unknown) > 0 and unknown["total"].iloc[0] > 0:
-                            unk_count = unknown["total"].iloc[0]
-                            st.caption(f"*{unk_count:,} stores lack census data*")
                     else:
-                        st.info("No stores in current view. Try zooming out or click Refresh.")
+                        st.info("No stores in current view.")
 
 
 def main():
@@ -793,6 +971,8 @@ def main():
         st.session_state.census_overlay_option = "None"
     if "show_map" not in st.session_state:
         st.session_state.show_map = False
+    if "show_drilldown" not in st.session_state:
+        st.session_state.show_drilldown = False
 
     # Render map view directly (no selection phase needed)
     render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, census_gdf)
