@@ -842,6 +842,149 @@ def render_category_drilldown(df: pd.DataFrame):
     )
 
 
+def get_census_drilldown_config(census_overlay: str) -> tuple[str | None, str, str]:
+    """
+    Get the bracket column and display info for census drilldown based on overlay selection.
+
+    Returns:
+        tuple: (bracket_column, title, bracket_label)
+               bracket_column is None if no census overlay is selected
+    """
+    overlay_config = {
+        "Median Household Income": ("income_bracket", "Census Drilldown: Median Household Income", "Income Quintile"),
+        "% Population 21-34": ("age_bracket", "Census Drilldown: % Population 21-34", "Age (21-34) Quintile"),
+        "% Population 25-44": ("age_bracket", "Census Drilldown: % Population 25-44", "Age (25-44) Quintile"),
+        "Median Age": ("median_age_bracket", "Census Drilldown: Median Age", "Median Age Quintile"),
+        "% College Educated": ("education_bracket", "Census Drilldown: % College Educated", "Education Quintile"),
+        "% Non-Family Households": ("nonfamily_bracket", "Census Drilldown: % Non-Family Households", "Non-Family HH Quintile"),
+        "Population Density": ("density_bracket", "Census Drilldown: Population Density", "Pop Density Quintile"),
+    }
+
+    if census_overlay == "None" or census_overlay not in overlay_config:
+        return None, "", ""
+
+    return overlay_config[census_overlay]
+
+
+def render_census_drilldown(df: pd.DataFrame):
+    """Render the census drill down table with quintile-level statistics."""
+    # Get the census overlay selection
+    census_overlay = st.session_state.get("census_overlay_option", "None")
+    bracket_col, title, bracket_label = get_census_drilldown_config(census_overlay)
+
+    # Header with close button
+    header_col, close_col = st.columns([4, 1])
+    with header_col:
+        st.subheader(title if title else "Census Drilldown")
+    with close_col:
+        if st.button("✕ Close", key="close_census_drilldown", use_container_width=True):
+            st.session_state.show_census_drilldown = False
+            st.rerun()
+
+    if bracket_col is None:
+        st.info("Select a Census Overlay from the sidebar to see demographic breakdown by quintile.")
+        return
+
+    if len(df) == 0:
+        st.info("No venues match the current filters.")
+        return
+
+    if bracket_col not in df.columns:
+        st.warning("Census bracket data not available. Run `python preprocess.py` to enable census analytics.")
+        return
+
+    # Get quintile breakdown using existing function
+    bracket_stats = categorize_stores_by_bracket(df, bracket_col=bracket_col)
+
+    if len(bracket_stats) == 0:
+        st.info("No census data available for venues.")
+        return
+
+    # Create display dataframe with same structure as state drilldown
+    display_df = bracket_stats[[
+        "bracket",
+        "total",
+        "with_both",
+        "both_pct",
+        "with_coors_edge",
+        "coors_pct",
+        "athletic_only",
+        "athletic_pct",
+        "neither",
+        "no_na_beer_pct",
+    ]].copy()
+
+    # Calculate coors_edge_only (coors without both)
+    display_df["coors_edge_only"] = display_df["with_coors_edge"] - display_df["with_both"]
+    display_df["coors_only_pct"] = (display_df["coors_edge_only"] / display_df["total"] * 100).round(1)
+
+    # Reorder columns to match state drilldown format
+    display_df = display_df[[
+        "bracket",
+        "total",
+        "with_both",
+        "both_pct",
+        "coors_edge_only",
+        "coors_only_pct",
+        "athletic_only",
+        "athletic_pct",
+        "neither",
+        "no_na_beer_pct",
+    ]]
+
+    display_df.columns = [
+        bracket_label,
+        "Total Venues",
+        "Both Brands",
+        "Both %",
+        "Coors Edge Only",
+        "Coors %",
+        "Athletic Only",
+        "Athletic %",
+        "No NA Beer",
+        "No NA %",
+    ]
+
+    # Display table with sorting enabled
+    st.dataframe(
+        display_df,
+        hide_index=True,
+        use_container_width=True,
+        height=400,
+        column_config={
+            bracket_label: st.column_config.TextColumn(bracket_label, width="medium"),
+            "Total Venues": st.column_config.NumberColumn("Total Venues", format="%d", width="small"),
+            "Both Brands": st.column_config.NumberColumn("Both Brands", format="%d", width="small"),
+            "Both %": st.column_config.NumberColumn("Both %", format="%.1f%%", width="small"),
+            "Coors Edge Only": st.column_config.NumberColumn("Coors Edge Only", format="%d", width="small"),
+            "Coors %": st.column_config.NumberColumn("Coors %", format="%.1f%%", width="small"),
+            "Athletic Only": st.column_config.NumberColumn("Athletic Only", format="%d", width="small"),
+            "Athletic %": st.column_config.NumberColumn("Athletic %", format="%.1f%%", width="small"),
+            "No NA Beer": st.column_config.NumberColumn("No NA Beer", format="%d", width="small"),
+            "No NA %": st.column_config.NumberColumn("No NA %", format="%.1f%%", width="small"),
+        }
+    )
+
+    # Summary stats
+    total_venues = bracket_stats["total"].sum()
+    total_both = bracket_stats["with_both"].sum()
+    total_coors_all = bracket_stats["with_coors_edge"].sum()
+    total_coors_only = total_coors_all - total_both
+    total_athletic = bracket_stats["athletic_only"].sum()
+    total_neither = bracket_stats["neither"].sum()
+
+    # Count quintiles (excluding Unknown)
+    quintile_count = len(bracket_stats[bracket_stats["bracket"] != "Unknown"])
+
+    st.caption(
+        f"**Totals:** {total_venues:,} venues across {quintile_count} quintiles | "
+        f"Both: {total_both:,} ({total_both/total_venues*100:.1f}%) | "
+        f"Coors Edge: {total_coors_only:,} ({total_coors_only/total_venues*100:.1f}%) | "
+        f"Athletic: {total_athletic:,} ({total_athletic/total_venues*100:.1f}%) | "
+        f"No NA: {total_neither:,} ({total_neither/total_venues*100:.1f}%)"
+    )
+
+
 def reset_filters():
     """Callback to reset all filters before widgets are instantiated."""
     # Reset category hierarchy
@@ -864,6 +1007,7 @@ def reset_filters():
     st.session_state.show_drilldown = False
     st.session_state.show_state_drilldown = False
     st.session_state.show_category_drilldown = False
+    st.session_state.show_census_drilldown = False
     st.session_state.viewport_bounds = None
 
 
@@ -1041,7 +1185,7 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
     """, unsafe_allow_html=True)
 
     # Title row with action buttons - give more space to button columns
-    title_col, btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([2, 0.8, 1.1, 1.3, 1.2])
+    title_col, btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1.8, 0.7, 1.0, 1.1, 1.1, 1.0])
     with title_col:
         st.subheader(summary_title)
     with btn_col1:
@@ -1064,6 +1208,7 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
         ):
             st.session_state.show_state_drilldown = True
             st.session_state.show_category_drilldown = False
+            st.session_state.show_census_drilldown = False
             st.session_state.show_drilldown = False
             st.rerun()
     with btn_col3:
@@ -1078,9 +1223,25 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
         ):
             st.session_state.show_category_drilldown = True
             st.session_state.show_state_drilldown = False
+            st.session_state.show_census_drilldown = False
             st.session_state.show_drilldown = False
             st.rerun()
     with btn_col4:
+        # Census Drilldown button - disabled if no census overlay selected
+        census_overlay = st.session_state.get("census_overlay_option", "None")
+        census_drilldown_disabled = census_overlay == "None"
+        if st.button(
+            "Census Drilldown",
+            disabled=census_drilldown_disabled,
+            use_container_width=True,
+            help="Select a Census Overlay to enable" if census_drilldown_disabled else "View demographic quintile breakdown"
+        ):
+            st.session_state.show_census_drilldown = True
+            st.session_state.show_state_drilldown = False
+            st.session_state.show_category_drilldown = False
+            st.session_state.show_drilldown = False
+            st.rerun()
+    with btn_col5:
         # Venue Drilldown button - always enabled
         if st.button(
             "Venue Drilldown",
@@ -1090,6 +1251,7 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
             st.session_state.show_drilldown = True
             st.session_state.show_state_drilldown = False
             st.session_state.show_category_drilldown = False
+            st.session_state.show_census_drilldown = False
             st.rerun()
 
     # Show summary stats
@@ -1122,9 +1284,10 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
     show_drilldown = st.session_state.get("show_drilldown", False)
     show_state_drilldown = st.session_state.get("show_state_drilldown", False)
     show_category_drilldown = st.session_state.get("show_category_drilldown", False)
+    show_census_drilldown = st.session_state.get("show_census_drilldown", False)
 
     # Early return if neither map nor drilldown should be shown
-    if not show_map and not show_drilldown and not show_state_drilldown and not show_category_drilldown:
+    if not show_map and not show_drilldown and not show_state_drilldown and not show_category_drilldown and not show_census_drilldown:
         return
 
     st.divider()
@@ -1157,6 +1320,11 @@ def render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, ce
         if selected_state_code:
             category_filtered_df = category_filtered_df[category_filtered_df["state"] == selected_state_code]
         render_category_drilldown(category_filtered_df)
+
+    # Show census drill-down table if enabled
+    if show_census_drilldown:
+        # For census drilldown, use data matching all filters (category + state)
+        render_census_drilldown(filtered_df)
 
     # Show venue drill-down table if enabled
     if show_drilldown:
@@ -1436,6 +1604,8 @@ def main():
         st.session_state.show_state_drilldown = False
     if "show_category_drilldown" not in st.session_state:
         st.session_state.show_category_drilldown = False
+    if "show_census_drilldown" not in st.session_state:
+        st.session_state.show_census_drilldown = False
 
     # Render map view directly (no selection phase needed)
     render_map_view(stores_df, main_categories, main_to_sub, sub_to_detailed, census_gdf)
