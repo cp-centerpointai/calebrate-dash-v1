@@ -31,6 +31,47 @@ COMPETITOR_BRAND_DATA_NAME = "Athletic Brew"
 EXCLUDE_BRANDS = ["High Noon"]
 
 
+def load_brand_products_reference() -> dict:
+    """
+    Load brand-products reference CSV and return mappings.
+    Returns dict with:
+        - 'coors_products': set of all products from Coors brands
+        - 'athletic_products': set of all products from Athletic Brewing
+    """
+    ref_path = Path("brands_products_reference.csv")
+    if not ref_path.exists():
+        print("Warning: brands_products_reference.csv not found")
+        return {"coors_products": set(), "athletic_products": set()}
+
+    ref_df = pd.read_csv(ref_path)
+
+    # Parse products column (comma-separated)
+    def parse_products(products_str):
+        if pd.isna(products_str) or products_str == "":
+            return []
+        return [p.strip() for p in str(products_str).split(",") if p.strip()]
+
+    # Get all Coors brand products
+    coors_brands = ref_df[ref_df["brand_type"] == "Coors"]
+    coors_products = set()
+    for _, row in coors_brands.iterrows():
+        coors_products.update(parse_products(row["products"]))
+
+    # Get Athletic Brewing products specifically
+    athletic_row = ref_df[ref_df["brand"] == "Athletic Brewing"]
+    athletic_products = set()
+    for _, row in athletic_row.iterrows():
+        athletic_products.update(parse_products(row["products"]))
+
+    print(f"  Loaded {len(coors_products)} Coors products")
+    print(f"  Loaded {len(athletic_products)} Athletic Brewing products")
+
+    return {
+        "coors_products": coors_products,
+        "athletic_products": athletic_products
+    }
+
+
 def parse_comma_delimited(value: str) -> list[str]:
     """
     Parse a comma-delimited string into a list of stripped strings.
@@ -258,6 +299,39 @@ def main():
     print("Adding brands_display column...")
     df["brands_display"] = df["all_brands"].apply(lambda x: ", ".join(x) if x else "None")
 
+    # Load brand-products reference and compute per-store Coors/Athletic products
+    print("Loading brand-products reference...")
+    brand_products_ref = load_brand_products_reference()
+    coors_products_set = brand_products_ref["coors_products"]
+    athletic_products_set = brand_products_ref["athletic_products"]
+
+    # Compute Coors products for each store
+    print("Computing Coors products per store...")
+    def get_coors_products(products_list):
+        if not products_list:
+            return []
+        return [p for p in products_list if p in coors_products_set]
+    df["coors_products"] = df["all_products"].apply(get_coors_products)
+
+    # Compute Athletic products for each store
+    print("Computing Athletic products per store...")
+    def get_athletic_products(products_list):
+        if not products_list:
+            return []
+        return [p for p in products_list if p in athletic_products_set]
+    df["athletic_products"] = df["all_products"].apply(get_athletic_products)
+
+    # Add display columns for tooltips (comma-joined strings)
+    print("Adding product display columns...")
+    df["coors_products_display"] = df["coors_products"].apply(lambda x: ", ".join(x) if x else "None")
+    df["athletic_products_display"] = df["athletic_products"].apply(lambda x: ", ".join(x) if x else "None")
+
+    # Print stats
+    coors_count = (df["coors_products"].apply(len) > 0).sum()
+    athletic_count = (df["athletic_products"].apply(len) > 0).sum()
+    print(f"  Stores with Coors products: {coors_count:,}")
+    print(f"  Stores with Athletic products: {athletic_count:,}")
+
     # Add store categorization flags for Coors Edge vs Athletic Brewing analysis
     print("Adding store categorization flags...")
     df["has_coors_edge"] = df["all_brands"].apply(lambda x: FOCUS_BRAND in x)
@@ -337,6 +411,32 @@ def main():
         df, edu_q = assign_quintiles(df, "pct_college_educated", "education_bracket", format_percent)
         print(f"  College educated thresholds: {[f'{q:.1f}%' for q in edu_q]}")
 
+        # Median Age brackets
+        def format_age(low, high, mode):
+            if mode == 'lt':
+                return f"< {high:.0f}"
+            elif mode == 'gt':
+                return f"> {low:.0f}"
+            else:
+                return f"{low:.0f}-{high:.0f}"
+        df, age_med_q = assign_quintiles(df, "median_age", "median_age_bracket", format_age)
+        print(f"  Median age thresholds: {[f'{q:.1f}' for q in age_med_q]}")
+
+        # Non-Family Households brackets
+        df, nonfam_q = assign_quintiles(df, "pct_nonfamily_hh", "nonfamily_bracket", format_percent)
+        print(f"  Non-family HH thresholds: {[f'{q:.1f}%' for q in nonfam_q]}")
+
+        # Population Density brackets
+        def format_density(low, high, mode):
+            if mode == 'lt':
+                return f"< {high:,.0f}"
+            elif mode == 'gt':
+                return f"> {low:,.0f}"
+            else:
+                return f"{low:,.0f}-{high:,.0f}"
+        df, density_q = assign_quintiles(df, "pop_density", "density_bracket", format_density)
+        print(f"  Pop density thresholds: {[f'{q:,.0f}' for q in density_q]}")
+
         # Compute lead scores (ML model predicting AB product depth)
         # Score is an integer 1-100
         print("Computing lead scores (ML model)...")
@@ -363,6 +463,9 @@ def main():
         df["income_bracket"] = "Unknown"
         df["age_bracket"] = "Unknown"
         df["education_bracket"] = "Unknown"
+        df["median_age_bracket"] = "Unknown"
+        df["nonfamily_bracket"] = "Unknown"
+        df["density_bracket"] = "Unknown"
         df["lead_score"] = 50  # Default neutral score (integer 1-100)
         df["lead_score_bracket"] = "Unknown"
 

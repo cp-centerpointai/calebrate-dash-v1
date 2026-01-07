@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Store Distribution Analysis Dashboard - A Streamlit application for analyzing brand distribution across retail stores. Users select a focus brand and competitor brands, then view an interactive map showing store distribution with color-coded markers and dynamic viewport statistics.
+Venue Distribution Analysis Dashboard - A Streamlit application for analyzing brand distribution across retail venues. Users select a focus brand and competitor brands, then view an interactive map showing venue distribution with color-coded markers and dynamic viewport statistics.
 
 ## Commands
 
@@ -15,7 +15,7 @@ source .venv/bin/activate  # or: source venv/bin/activate
 # Run the Streamlit dashboard
 streamlit run app.py
 
-# Reprocess store data (only needed when sample.csv changes)
+# Reprocess venue data (only needed when sample.csv changes)
 python preprocess.py
 
 # Fetch Census demographic data (requires CENSUS_API_KEY in .env)
@@ -33,19 +33,19 @@ python scripts/fetch_census_data.py
 
 ### Data Flow
 
-1. **Raw Data**: `sample.csv` (~188k stores with brand/product data)
+1. **Raw Data**: `sample.csv` (~188k venues with brand/product data)
 2. **Preprocessing**: `preprocess.py` transforms CSV → parquet + JSON lookup tables
 3. **Census Data**: `scripts/fetch_census_data.py` downloads tract geometries and ACS demographics
 4. **Runtime**: `app.py` loads only preprocessed files (no CSV parsing at runtime)
 
 ### Key Files
 
-- `preprocess.py` - One-time data transformation for store data
+- `preprocess.py` - One-time data transformation for venue data
 - `scripts/fetch_census_data.py` - Census tract geometry + ACS demographic data fetcher
 - `app.py` - Streamlit dashboard with two-phase UI (selection → map)
-- `data/stores.parquet` - Processed store data with list columns for brands/products
+- `data/stores.parquet` - Processed venue data with list columns for brands/products
 - `data/brands.json` - Distinct brand names for dropdowns
-- `data/subcategories.json` - Store subcategory options
+- `data/subcategories.json` - Venue subcategory options
 - `data/census_tracts.parquet` - GeoParquet with tract geometries and demographics
 
 ### Application Flow
@@ -53,19 +53,19 @@ python scripts/fetch_census_data.py
 The app uses a two-phase UI controlled by `st.session_state.analysis_phase`:
 
 1. **Selection Phase** (`render_selection_screen`): User selects focus brand, competitor brands, optional subcategory filter, and optional state filter. Clicking "Analyze" transitions to map phase.
-2. **Map Phase** (`render_map_view`): Interactive Folium map displays stores with:
+2. **Map Phase** (`render_map_view`): Interactive Folium map displays venues with:
    - Color-coded CircleMarkers (green=focus brand, red=competitor only, gray=whitespace)
    - MarkerCluster for performance (clusters at `maxClusterRadius: 30`, unclusters at zoom 12+)
    - Optional Census choropleth overlays (requires state selection due to data volume)
-   - Sidebar controls for census overlay selection and "Restart Analysis" button
+   - Sidebar controls for census overlay selection and "Reset Filters" button
    - Right-side panel showing viewport-filtered statistics that update on pan/zoom
 
-### Store Categorization Logic
+### Venue Categorization Logic
 
-Stores are classified into three mutually exclusive groups:
-- **With focus brand** (green): Store carries the selected focus brand
-- **Competitor only** (red): Store carries competitor brand(s) but NOT the focus brand
-- **Neither/whitespace** (gray): Store carries neither focus nor competitor brands
+Venues are classified into three mutually exclusive groups:
+- **With focus brand** (green): Venue carries the selected focus brand
+- **Competitor only** (red): Venue carries competitor brand(s) but NOT the focus brand
+- **Neither/whitespace** (gray): Venue carries neither focus nor competitor brands
 
 ### Census Overlay Options
 
@@ -85,7 +85,7 @@ When a state is selected, the sidebar offers demographic overlays:
 
 The `all_brands` and `all_products` columns are stored as Python lists in parquet (via pyarrow). The `brands_display` column is a pre-joined string for tooltip display.
 
-**Store columns**: `store_id`, `name`, `address`, `city`, `state`, `postal_code`, `latitude`, `longitude`, `chain_name`, `subcategory`, `detailed_category`, `all_brands`, `brands_display`, `brand_count`
+**Venue columns**: `store_id`, `name`, `address`, `city`, `state`, `postal_code`, `latitude`, `longitude`, `chain_name`, `subcategory`, `detailed_category`, `all_brands`, `brands_display`, `brand_count`
 
 **Census columns**: `GEOID`, `state_fips`, `state_name`, `state_abbrev`, `median_hh_income`, `pct_pop_21_34`, `pct_college_educated`, `geometry`
 
